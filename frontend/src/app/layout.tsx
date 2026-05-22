@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import Providers from "./providers";
 
 export const metadata: Metadata = {
   title: "AIVet — AI Visibility & GEO Platform",
@@ -14,7 +15,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body>{children}</body>
+      {/* suppressHydrationWarning: browser extensions add attributes to <body> before
+          React hydrates, which would otherwise flag a harmless hydration mismatch. */}
+      <body suppressHydrationWarning>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

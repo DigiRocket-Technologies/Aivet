@@ -1,372 +1,285 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { createPortal } from "react-dom";
 import Topbar from "@/components/shared/Topbar";
 import CompetitorChart from "@/components/charts/CompetitorChart";
-import { Plus, TrendingUp, TrendingDown, Minus, ExternalLink, Trophy, Eye, Link2, Users } from "lucide-react";
+import { useAuthStore } from "@/lib/stores/authStore";
+import { visibilityApi, type CompetitorAnalysis } from "@/lib/api/visibility";
+import { projectsApi, type CompetitorEntry } from "@/lib/api/projects";
 import { engineColors, getScoreBand } from "@/lib/colors";
+import { useTier } from "@/lib/hooks/useTier";
+import LockedFeature from "@/components/shared/LockedFeature";
+import {
+  Plus, Trophy, Eye, Users, Trash2, X, Loader2, AlertCircle, RefreshCw, ArrowRight,
+} from "lucide-react";
 
-// ── Model Logos ────────────────────────────────────────────────────────────
+const LIME = "#C9F31D";
+const card: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12 };
+const MODEL_LABEL: Record<string, string> = { chatgpt: "ChatGPT", gemini: "Gemini", claude: "Claude", perplexity: "Perplexity", google_ai_overview: "Google AI" };
+const labelFor = (m: string) => MODEL_LABEL[m] ?? m.charAt(0).toUpperCase() + m.slice(1);
 
-function ChatGPTLogo({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 41 41" fill="none">
-      <path d="M37.532 16.87a9.963 9.963 0 0 0-.856-8.184 10.078 10.078 0 0 0-10.855-4.835 9.964 9.964 0 0 0-6.212-2.71 10.079 10.079 0 0 0-9.49 6.963 9.967 9.967 0 0 0-6.188 4.83 10.079 10.079 0 0 0 1.24 11.817 9.965 9.965 0 0 0 .856 8.185 10.079 10.079 0 0 0 10.855 4.835 9.965 9.965 0 0 0 6.212 2.71 10.079 10.079 0 0 0 9.49-6.963 9.967 9.967 0 0 0 6.188-4.832 10.079 10.079 0 0 0-1.24-11.816zm-17.223 24.09a7.474 7.474 0 0 1-4.801-1.735c.061-.033.168-.091.237-.134l7.964-4.6a1.294 1.294 0 0 0 .655-1.134V19.054l3.366 1.944a.12.12 0 0 1 .066.092v9.299a7.505 7.505 0 0 1-7.487 7.57zm-16.124-6.908a7.471 7.471 0 0 1-.894-5.023c.06.036.162.099.237.141l7.964 4.6a1.297 1.297 0 0 0 1.308 0l9.724-5.614v3.888a.12.12 0 0 1-.048.103l-8.051 4.649a7.504 7.504 0 0 1-10.24-2.744zm-2.09-17.496a7.47 7.47 0 0 1 3.908-3.285c0 .068-.004.19-.004.274v9.201a1.294 1.294 0 0 0 .654 1.132l9.723 5.614-3.366 1.944a.12.12 0 0 1-.114.012L8.048 25.444a7.504 7.504 0 0 1-5.953-8.884zm27.651 6.437l-9.724-5.615 3.367-1.943a.121.121 0 0 1 .114-.012l8.048 4.648a7.498 7.498 0 0 1-1.158 13.528v-9.476a1.293 1.293 0 0 0-.647-1.13zm3.35-5.043c-.059-.037-.162-.099-.236-.141l-7.965-4.6a1.298 1.298 0 0 0-1.308 0l-9.723 5.614v-3.888a.12.12 0 0 1 .048-.103l8.05-4.645a7.497 7.497 0 0 1 11.135 7.763zm-21.063 6.929l-3.367-1.944a.12.12 0 0 1-.065-.092v-9.299a7.497 7.497 0 0 1 12.293-5.756 6.94 6.94 0 0 0-.236.134l-7.965 4.6a1.294 1.294 0 0 0-.654 1.132l-.006 11.225zm1.829-3.943l4.33-2.501 4.332 2.5v4.999l-4.331 2.5-4.331-2.5V21z" fill="#10A37F" />
-    </svg>
-  );
+function cleanDomain(raw: string) {
+  return raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
 
-function GeminiLogo({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 28 28" fill="none">
-      <path d="M14 28C14 26.0633 13.6267 24.2433 12.88 22.54C12.1567 20.8367 11.165 19.355 9.905 18.095C8.645 16.835 7.16333 15.8433 5.46 15.12C3.75667 14.3733 1.93667 14 0 14C1.93667 14 3.75667 13.6383 5.46 12.915C7.16333 12.1683 8.645 11.165 9.905 9.905C11.165 8.645 12.1567 7.16333 12.88 5.46C13.6267 3.75667 14 1.93667 14 0C14 1.93667 14.3617 3.75667 15.085 5.46C15.8317 7.16333 16.835 8.645 18.095 9.905C19.355 11.165 20.8367 12.1683 22.54 12.915C24.2433 13.6383 26.0633 14 28 14C26.0633 14 24.2433 14.3733 22.54 15.12C20.8367 15.8433 19.355 16.835 18.095 18.095C16.835 19.355 15.8317 20.8367 15.085 22.54C14.3617 24.2433 14 26.0633 14 28Z" fill="#1A73E8" />
-    </svg>
+// ── Add competitor modal ─────────────────────────────────────────────────────
+function AddCompetitorModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (b: string, d: string) => Promise<void> }) {
+  const [brandName, setBrandName] = useState("");
+  const [domain, setDomain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!brandName.trim()) return setErr("Competitor name is required");
+    setBusy(true); setErr(null);
+    try { await onSubmit(brandName.trim(), cleanDomain(domain)); }
+    catch (e2) { setErr(e2 instanceof Error ? e2.message : "Failed"); setBusy(false); }
+  }
+
+  const node = (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} className="animate-fade-in" style={{ width: "100%", maxWidth: 420, background: "#141517", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, color: "#fff", margin: 0 }}>Add competitor</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", display: "flex" }}><X size={18} style={{ color: "rgba(255,255,255,0.45)" }} /></button>
+        </div>
+        <form onSubmit={submit} style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+          {err && <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 10, fontSize: 12.5, background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)", color: "#EF4444" }}><AlertCircle size={15} />{err}</div>}
+          <div>
+            <label style={{ display: "block", fontSize: 12, color: "rgba(255,255,255,0.6)", marginBottom: 7 }}>Brand name</label>
+            <input className="auth-input" style={{ padding: "11px 13px" }} value={brandName} onChange={(e) => setBrandName(e.target.value)} placeholder="RivalCo" autoFocus />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, color: "rgba(255,255,255,0.6)", marginBottom: 7 }}>Domain <span style={{ color: "rgba(255,255,255,0.3)" }}>(optional)</span></label>
+            <input className="auth-input" style={{ padding: "11px 13px" }} value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="rivalco.com" />
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+            <button type="button" onClick={onClose} className="btn-ghost" style={{ flex: 1, padding: "11px", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button type="submit" disabled={busy} className="btn-lime" style={{ flex: 1, padding: "11px", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, cursor: busy ? "not-allowed" : "pointer" }}>
+              {busy ? <><Loader2 size={15} className="auth-spin" /> Adding…</> : "Add competitor"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
+  if (typeof document === "undefined") return null;
+  return createPortal(node, document.body);
 }
 
-function ClaudeLogo({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M13.827 3.52h3.603l-7.376 16.96H6.45l7.377-16.96z" fill="#D97757" />
-      <path d="M6.288 3.52h3.604L2.515 20.48H.001L6.288 3.52zM17.047 13.952h3.476l-1.738-4.656-1.738 4.656zM14.123 20.48l1.06-2.832h5.534l1.06 2.832H24L18.785 7.04h-2.952L10.618 20.48h3.505z" fill="#D97757" />
-    </svg>
-  );
-}
-
-function PerplexityLogo({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M12 .5L7.5 5H4v4.5L.5 12 4 15.5V20h3.5l4.5 4.5 4.5-4.5H20v-4.5l3.5-3.5L20 9.5V5h-3.5L12 .5z" stroke="#22B8CF" strokeWidth="1.2" />
-      <path d="M8.5 8.5h7v7h-7z" stroke="#22B8CF" strokeWidth="1.2" />
-      <path d="M12 5v14M5 12h14" stroke="#22B8CF" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-const MODEL_LOGO_MAP: Record<string, React.FC<{ size?: number }>> = {
-  chatgpt: ChatGPTLogo,
-  gemini: GeminiLogo,
-  claude: ClaudeLogo,
-  perplexity: PerplexityLogo,
-};
-
-const MODEL_LABEL: Record<string, string> = {
-  chatgpt: "ChatGPT",
-  gemini: "Gemini",
-  claude: "Claude",
-  perplexity: "Perplexity",
-};
-
-// ── Data ───────────────────────────────────────────────────────────────────
-
-const COMPETITORS = [
-  {
-    brand: "RivalCo", domain: "rivalco.com", score: 85, change: +5,
-    mentions: 312, citations: 28,
-    models: ["chatgpt", "gemini", "claude", "perplexity"],
-    modelScores: { chatgpt: 88, gemini: 82, claude: 86, perplexity: 84 },
-    topPrompt: "Best CRM for enterprise",
-  },
-  {
-    brand: "Acme Corp", domain: "acmecorp.com", score: 72, change: +8,
-    mentions: 487, citations: 93,
-    models: ["chatgpt", "gemini", "claude", "perplexity"],
-    modelScores: { chatgpt: 75, gemini: 68, claude: 74, perplexity: 71 },
-    topPrompt: "Project management tools",
-    isOwn: true,
-  },
-  {
-    brand: "TechBrand", domain: "techbrand.io", score: 61, change: -3,
-    mentions: 198, citations: 15,
-    models: ["chatgpt", "claude"],
-    modelScores: { chatgpt: 63, gemini: 0, claude: 59, perplexity: 0 },
-    topPrompt: "SaaS tools for startups",
-  },
-  {
-    brand: "StartupXYZ", domain: "startupxyz.com", score: 44, change: +2,
-    mentions: 134, citations: 8,
-    models: ["chatgpt", "gemini"],
-    modelScores: { chatgpt: 46, gemini: 42, claude: 0, perplexity: 0 },
-    topPrompt: "Affordable business software",
-  },
-  {
-    brand: "MegaCorp", domain: "megacorp.com", score: 38, change: -7,
-    mentions: 89, citations: 5,
-    models: ["chatgpt"],
-    modelScores: { chatgpt: 38, gemini: 0, claude: 0, perplexity: 0 },
-    topPrompt: "Enterprise solutions",
-  },
-];
-
-const ALL_MODELS = ["chatgpt", "gemini", "claude", "perplexity"];
-
-// ── Styles ─────────────────────────────────────────────────────────────────
-
-const card: React.CSSProperties = {
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: 12,
-};
-
-// ── Component ──────────────────────────────────────────────────────────────
-
+// ── Page ─────────────────────────────────────────────────────────────────────
 export default function CompetitorsPage() {
-  const ownBrand = COMPETITORS.find((c) => c.isOwn);
-  const topCompetitor = COMPETITORS.filter((c) => !c.isOwn).sort((a, b) => b.score - a.score)[0];
-  const scoreDiff = ownBrand && topCompetitor ? topCompetitor.score - ownBrand.score : 0;
+  const project   = useAuthStore((s) => s.project);
+  const projectId = useAuthStore((s) => s.projectId);
+  const { allows, resolved: tierResolved } = useTier();
+
+  const [days, setDays]       = useState(30);
+  const [data, setData]       = useState<CompetitorAnalysis | null>(null);
+  const [comps, setComps]     = useState<CompetitorEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [notice, setNotice]   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!projectId) { setLoading(false); return; }
+    setLoading(true); setError(null);
+    try {
+      const [a, c] = await Promise.all([
+        visibilityApi.getCompetitorAnalysis(projectId, days),
+        projectsApi.listCompetitors(projectId).catch(() => [] as CompetitorEntry[]),
+      ]);
+      setData(a); setComps(c);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load competitors");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, days]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function handleAdd(brandName: string, domain: string) {
+    if (!projectId) return;
+    await projectsApi.addCompetitor(projectId, { brandName, domain });
+    setShowAdd(false);
+    setNotice(`Added ${brandName}. Run a campaign to start tracking its visibility vs yours.`);
+    await load();
+  }
+
+  async function handleRemove(name: string) {
+    if (!projectId) return;
+    const match = comps.find((c) => c.brandName.toLowerCase() === name.toLowerCase());
+    if (!match?._id) return;
+    setComps((prev) => prev.filter((c) => c._id !== match._id));
+    await projectsApi.removeCompetitor(projectId, match._id).catch(() => {});
+    await load();
+  }
+
+  const entities = data?.entities ?? [];
+  const models = data?.models ?? [];
+  const own = entities.find((e) => e.isOwn);
+  const topRival = entities.filter((e) => !e.isOwn).sort((a, b) => b.score - a.score)[0];
+  const gap = own && topRival ? topRival.score - own.score : 0;
 
   const stats = [
-    { label: "Competitors Tracked", value: "4",   icon: Users,   color: "#C9F31D" },
-    { label: "Your Score",          value: String(ownBrand?.score ?? "—"), icon: Trophy, color: "#22C55E" },
-    { label: "Gap to Leader",       value: scoreDiff > 0 ? `-${scoreDiff}` : "Leading", icon: TrendingUp, color: scoreDiff > 0 ? "#EF4444" : "#22C55E" },
-    { label: "Total Mentions",      value: String(COMPETITORS.reduce((s, c) => s + c.mentions, 0)), icon: Eye, color: "#22B8CF" },
+    { label: "Competitors Tracked", value: String(comps.length), icon: Users, color: LIME },
+    { label: "Your Share", value: own ? `${own.score}%` : "—", icon: Trophy, color: "#22C55E" },
+    { label: "Gap to Leader", value: gap > 0 ? `-${gap}%` : "Leading", icon: Eye, color: gap > 0 ? "#EF4444" : "#22C55E" },
+    { label: "Total Mentions", value: String(entities.reduce((s, e) => s + e.mentions, 0)), icon: Eye, color: "#22B8CF" },
   ];
 
-  const shareData = COMPETITORS.map((c) => ({ brand: c.brand, score: c.score, color: "" }));
+  const shareData = entities.map((e) => ({ brand: e.name, score: e.score, color: e.isOwn ? LIME : getScoreBand(e.score).color }));
+
+  if (tierResolved && !allows("competitors")) {
+    return <LockedFeature title="Competitor Analysis" feature="competitors" subtitle={project ? `${project.name} · ${project.domain}` : undefined} />;
+  }
 
   return (
     <div style={{ background: "#0E0F11", minHeight: "100vh" }}>
-      <Topbar title="Competitor Analysis" subtitle="Track visibility share across AI models" />
+      <Topbar title="Competitor Analysis" subtitle={project ? `${project.name} · ${project.domain}` : "Track visibility share across AI models"} days={days} onDaysChange={setDays} />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
 
-        {/* ── Stats Row ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          {stats.map(({ label, value, icon: Icon, color }) => (
-            <div key={label} style={{ ...card, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
-              <div style={{
-                width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-                background: `${color}15`, border: `1px solid ${color}25`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <Icon size={16} style={{ color }} />
+        {!projectId && (
+          <div style={{ ...card, padding: 40, textAlign: "center" }}>
+            <p style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", margin: 0 }}>Select or add a brand from the sidebar to analyze competitors.</p>
+          </div>
+        )}
+
+        {projectId && (
+          <>
+            {error && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderRadius: 10, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "rgba(255,255,255,0.65)" }}><AlertCircle size={14} style={{ color: "#EF4444" }} /> {error}</span>
+                <button onClick={load} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 7, border: "none", cursor: "pointer", background: "rgba(239,68,68,0.12)", color: "#EF4444", fontSize: 11, fontWeight: 600 }}><RefreshCw size={11} /> Retry</button>
               </div>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-0.5px", fontVariantNumeric: "tabular-nums" }}>
-                  {value}
+            )}
+            {notice && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", borderRadius: 10, background: "rgba(201,243,29,0.07)", border: "1px solid rgba(201,243,29,0.22)" }}>
+                <span style={{ fontSize: 12.5, color: "rgba(255,255,255,0.75)", flex: 1 }}>{notice}</span>
+                <Link href="/prompts" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600, color: LIME, textDecoration: "none" }}>Campaigns <ArrowRight size={12} /></Link>
+              </div>
+            )}
+
+            {/* Stats */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+              {stats.map(({ label, value, icon: Icon, color }) => (
+                <div key={label} style={{ ...card, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, background: `${color}15`, border: `1px solid ${color}25`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Icon size={16} style={{ color }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-0.5px" }}>{loading ? "—" : value}</div>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 3 }}>{label}</div>
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 3 }}>{label}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* ── Header Action ── */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <p style={{ fontSize: 13, color: "rgba(255,255,255,0.50)", margin: 0 }}>
-            Tracking{" "}
-            <span style={{ color: "#fff", fontWeight: 600 }}>4 competitors</span>
-            {" "}across{" "}
-            <span style={{ color: "#fff", fontWeight: 600 }}>4 AI models</span>
-          </p>
-          <button style={{
-            display: "flex", alignItems: "center", gap: 7,
-            padding: "8px 16px", borderRadius: 8, border: "none", cursor: "pointer",
-            background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700,
-          }}>
-            <Plus size={14} />
-            Add Competitor
-          </button>
-        </div>
-
-        {/* ── Chart + Table ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, alignItems: "start" }}>
-
-          {/* Chart */}
-          <CompetitorChart data={shareData} brandName="Acme Corp" />
-
-          {/* Competitor Table */}
-          <div style={{ ...card, overflow: "hidden" }}>
-            {/* Table header */}
-            <div style={{
-              padding: "14px 20px",
-              borderBottom: "1px solid rgba(255,255,255,0.07)",
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-            }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Competitor Breakdown</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                {ALL_MODELS.map((m) => {
-                  const Logo = MODEL_LOGO_MAP[m];
-                  const color = engineColors[m];
-                  return (
-                    <div key={m} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "rgba(255,255,255,0.40)" }}>
-                      <div style={{
-                        width: 20, height: 20, borderRadius: 5,
-                        background: `${color}15`, border: `1px solid ${color}30`,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>
-                        <Logo size={11} />
-                      </div>
-                      {MODEL_LABEL[m]}
-                    </div>
-                  );
-                })}
-              </div>
+              ))}
             </div>
 
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                    {["#", "Brand", "Score", "Change", "Mentions", "Citations", "ChatGPT", "Gemini", "Claude", "Perplexity"].map((h) => (
-                      <th key={h} style={{
-                        padding: "9px 16px", textAlign: "left",
-                        fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
-                        color: "rgba(255,255,255,0.28)", textTransform: "uppercase", whiteSpace: "nowrap",
-                      }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...COMPETITORS]
-                    .sort((a, b) => b.score - a.score)
-                    .map((c, i) => {
-                      const band = getScoreBand(c.score);
-                      const isUp = c.change > 0;
-                      const isDown = c.change < 0;
+            {/* Header action */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <p style={{ fontSize: 13, color: "rgba(255,255,255,0.50)", margin: 0 }}>
+                Tracking <span style={{ color: "#fff", fontWeight: 600 }}>{comps.length} competitors</span> across <span style={{ color: "#fff", fontWeight: 600 }}>{models.length || 4} AI models</span>
+              </p>
+              <button onClick={() => setShowAdd(true)} className="btn-lime" style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", fontSize: 13, cursor: "pointer" }}>
+                <Plus size={14} /> Add Competitor
+              </button>
+            </div>
 
-                      return (
-                        <tr
-                          key={c.brand}
-                          style={{
-                            borderBottom: i < COMPETITORS.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
-                            background: c.isOwn ? "rgba(201,243,29,0.03)" : "transparent",
-                            transition: "background 0.15s",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!c.isOwn) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.025)";
-                          }}
-                          onMouseLeave={(e) => {
-                            (e.currentTarget as HTMLElement).style.background = c.isOwn ? "rgba(201,243,29,0.03)" : "transparent";
-                          }}
-                        >
-                          {/* Rank */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <span style={{
-                              fontSize: 12, fontWeight: 700,
-                              color: i === 0 ? "#C9F31D" : "rgba(255,255,255,0.28)",
-                              fontVariantNumeric: "tabular-nums",
-                            }}>
-                              {i === 0 ? "🥇" : `#${i + 1}`}
-                            </span>
-                          </td>
+            {entities.length <= 1 && !loading ? (
+              <div style={{ ...card, padding: 40, textAlign: "center" }}>
+                <p style={{ fontSize: 13.5, color: "rgba(255,255,255,0.6)", margin: "0 0 14px" }}>
+                  No competitors tracked yet. Add competitors, then run a campaign to compare visibility across AI engines.
+                </p>
+                <button onClick={() => setShowAdd(true)} className="btn-lime" style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 16px", fontSize: 12.5, cursor: "pointer" }}>
+                  <Plus size={15} /> Add Competitor
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, alignItems: "start" }}>
+                <CompetitorChart data={shareData} brandName={data?.brandName ?? ""} />
 
-                          {/* Brand */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span style={{ fontSize: 13, fontWeight: 700, color: c.isOwn ? "#C9F31D" : "#fff" }}>
-                                {c.brand}
-                              </span>
-                              {c.isOwn && (
-                                <span style={{
-                                  fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 20,
-                                  background: "rgba(201,243,29,0.15)", color: "#C9F31D", letterSpacing: "0.06em",
-                                }}>
-                                  YOU
-                                </span>
-                              )}
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2, fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
-                              {c.domain}
-                              <ExternalLink size={9} />
-                            </div>
-                          </td>
-
-                          {/* Score */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{
-                                width: 52, height: 5, borderRadius: 3,
-                                background: "rgba(255,255,255,0.08)", overflow: "hidden", flexShrink: 0,
-                              }}>
-                                <div style={{
-                                  height: "100%", borderRadius: 3,
-                                  width: `${c.score}%`,
-                                  background: c.isOwn ? "linear-gradient(90deg,#C9F31D,#A8D017)" : band.color,
-                                }} />
-                              </div>
-                              <span style={{ fontSize: 15, fontWeight: 800, color: band.color, fontVariantNumeric: "tabular-nums" }}>
-                                {c.score}
-                              </span>
-                              <span style={{
-                                fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20,
-                                background: band.bg, color: band.color, letterSpacing: "0.04em",
-                              }}>
-                                {getScoreBand(c.score).label}
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* Change */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <div style={{
-                              display: "inline-flex", alignItems: "center", gap: 4,
-                              padding: "3px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-                              background: isUp ? "rgba(34,197,94,0.12)" : isDown ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.06)",
-                              color: isUp ? "#22C55E" : isDown ? "#EF4444" : "rgba(255,255,255,0.30)",
-                            }}>
-                              {isUp ? <TrendingUp size={10} /> : isDown ? <TrendingDown size={10} /> : <Minus size={10} />}
-                              {isUp ? "+" : ""}{c.change}
-                            </div>
-                          </td>
-
-                          {/* Mentions */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
-                              {c.mentions.toLocaleString()}
-                            </span>
-                          </td>
-
-                          {/* Citations */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                              <Link2 size={11} style={{ color: "rgba(255,255,255,0.30)" }} />
-                              <span style={{ fontSize: 13, fontWeight: 600, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
-                                {c.citations}
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* Per-model scores */}
-                          {ALL_MODELS.map((m) => {
-                            const ms = c.modelScores[m as keyof typeof c.modelScores] ?? 0;
-                            const active = c.models.includes(m);
-                            const mb = getScoreBand(ms);
-                            const mColor = engineColors[m];
-                            return (
-                              <td key={m} style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                                {active ? (
-                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                    <div style={{
-                                      width: 36, height: 4, borderRadius: 2,
-                                      background: "rgba(255,255,255,0.08)", overflow: "hidden", flexShrink: 0,
-                                    }}>
-                                      <div style={{
-                                        height: "100%", borderRadius: 2,
-                                        width: `${ms}%`, background: mColor, opacity: 0.8,
-                                      }} />
-                                    </div>
-                                    <span style={{ fontSize: 12, fontWeight: 700, color: mb.color, fontVariantNumeric: "tabular-nums" }}>
-                                      {ms}
-                                    </span>
+                <div style={{ ...card, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+                    <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Share of Voice Breakdown</h3>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                          {["#", "Brand", "Share", "Mentions", ...models.map(labelFor), ""].map((h, i) => (
+                            <th key={i} style={{ padding: "9px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: "rgba(255,255,255,0.28)", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {entities.map((e, i) => {
+                          const band = getScoreBand(e.score);
+                          return (
+                            <tr key={e.name} style={{ borderBottom: i < entities.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none", background: e.isOwn ? "rgba(201,243,29,0.03)" : "transparent" }}>
+                              <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: i === 0 ? LIME : "rgba(255,255,255,0.28)" }}>{i === 0 ? "🥇" : `#${i + 1}`}</span>
+                              </td>
+                              <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 700, color: e.isOwn ? LIME : "#fff" }}>{e.name}</span>
+                                  {e.isOwn && <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 20, background: "rgba(201,243,29,0.15)", color: LIME }}>YOU</span>}
+                                </div>
+                              </td>
+                              <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <div style={{ width: 52, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                                    <div style={{ height: "100%", borderRadius: 3, width: `${e.score}%`, background: e.isOwn ? "linear-gradient(90deg,#C9F31D,#A8D017)" : band.color }} />
                                   </div>
-                                ) : (
-                                  <span style={{ fontSize: 12, color: "rgba(255,255,255,0.18)" }}>—</span>
+                                  <span style={{ fontSize: 14, fontWeight: 800, color: band.color }}>{e.score}%</span>
+                                </div>
+                              </td>
+                              <td style={{ padding: "13px 16px", fontSize: 13, fontWeight: 600, color: "#fff" }}>{e.mentions.toLocaleString()}</td>
+                              {models.map((m) => {
+                                const v = e.perModel[m] ?? 0;
+                                const mColor = engineColors[m] ?? "#888";
+                                return (
+                                  <td key={m} style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                      <div style={{ width: 32, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                                        <div style={{ height: "100%", borderRadius: 2, width: `${v}%`, background: mColor, opacity: 0.85 }} />
+                                      </div>
+                                      <span style={{ fontSize: 12, fontWeight: 600, color: v ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.25)" }}>{v}</span>
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                              <td style={{ padding: "13px 16px" }}>
+                                {!e.isOwn && (
+                                  <button onClick={() => handleRemove(e.name)} title="Remove" style={{ width: 28, height: 28, borderRadius: 7, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <Trash2 size={12} style={{ color: "#EF4444" }} />
+                                  </button>
                                 )}
                               </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
+
+      {showAdd && <AddCompetitorModal onClose={() => setShowAdd(false)} onSubmit={handleAdd} />}
     </div>
   );
 }

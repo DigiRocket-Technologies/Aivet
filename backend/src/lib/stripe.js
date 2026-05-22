@@ -18,17 +18,18 @@ export const PLAN_LIMITS = {
   enterprise: { promptLimit: 100000, projectLimit: 50 },
 };
 
+// Support both STRIPE_PRICE_* and the project's STRIPE_PRICE_AIVET_* env names.
+const PRICE_STARTER    = process.env.STRIPE_PRICE_STARTER    ?? process.env.STRIPE_PRICE_AIVET_STARTER;
+const PRICE_PRO        = process.env.STRIPE_PRICE_PRO        ?? process.env.STRIPE_PRICE_AIVET_PROFESSIONAL;
+const PRICE_ENTERPRISE = process.env.STRIPE_PRICE_ENTERPRISE ?? process.env.STRIPE_PRICE_AIVET_ENTERPRISE;
+
 export function planFromPriceId(priceId) {
-  if (priceId === process.env.STRIPE_PRICE_STARTER)    return "starter";
-  if (priceId === process.env.STRIPE_PRICE_PRO)        return "pro";
-  if (priceId === process.env.STRIPE_PRICE_ENTERPRISE) return "enterprise";
+  if (priceId === PRICE_STARTER)    return "starter";
+  if (priceId === PRICE_PRO)        return "pro";
+  if (priceId === PRICE_ENTERPRISE) return "enterprise";
   return "free";
 }
 
 export function priceIdForPlan(plan) {
-  return {
-    starter:    process.env.STRIPE_PRICE_STARTER,
-    pro:        process.env.STRIPE_PRICE_PRO,
-    enterprise: process.env.STRIPE_PRICE_ENTERPRISE,
-  }[plan];
+  return { starter: PRICE_STARTER, pro: PRICE_PRO, enterprise: PRICE_ENTERPRISE }[plan];
 }

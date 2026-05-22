@@ -84,7 +84,7 @@ router.post("/login", async (req, res) => {
 // POST /api/auth/magic-link/send  { email, fullName? }
 router.post("/magic-link/send", async (req, res) => {
   try {
-    const { email, fullName } = req.body;
+    const { email, fullName, deviceId } = req.body;
     if (!email) return res.status(400).json({ success: false, message: "Email required" });
 
     // Always respond success to avoid user enumeration
@@ -94,14 +94,48 @@ router.post("/magic-link/send", async (req, res) => {
     const expiresAt = new Date(Date.now() + ttl);
     const purpose = (await User.findOne({ email })) ? "login" : "signup";
 
-    await MagicLinkToken.create({ email: email.toLowerCase(), tokenHash, expiresAt, purpose });
+    await MagicLinkToken.create({ email: email.toLowerCase(), tokenHash, expiresAt, purpose, deviceId: deviceId || undefined });
 
-    const url = `${process.env.FRONTEND_URL}/auth/verify?token=${raw}&email=${encodeURIComponent(email)}${
+    // The email link must be clickable from ANY device, so in production it must
+    // never be a localhost URL (which only works on the dev machine). Priority:
+    //   1. MAGIC_LINK_BASE_URL (explicit override)
+    //   2. the request origin — but in prod, ignore a localhost origin (happens
+    //      when the frontend is run locally against the deployed API)
+    //   3. the deployed frontend.
+    const FALLBACK_FRONTEND = process.env.APP_URL || "https://aivet-frontend.vercel.app";
+    const origin = req.headers.origin;
+    const originIsLocal = !!origin && /localhost|127\.0\.0\.1/.test(origin);
+    const prod = process.env.NODE_ENV === "production";
+    const base =
+      process.env.MAGIC_LINK_BASE_URL
+      ?? ((prod && (originIsLocal || !origin)) ? FALLBACK_FRONTEND : origin)
+      ?? FALLBACK_FRONTEND;
+    const url = `${base}/verify?token=${raw}&email=${encodeURIComponent(email)}${
       fullName ? `&fullName=${encodeURIComponent(fullName)}` : ""
     }`;
-    await sendMagicLinkEmail(email, url);
+    const ttlMin = Math.max(1, Math.round(ttl / 60000));
+    const isProd = process.env.NODE_ENV === "production";
 
-    res.json({ success: true, message: "Magic link sent if the email is valid" });
+    // Surface send failures instead of telling the user "check your email" when
+    // nothing actually went out. (Doesn't reveal whether the account exists.)
+    try {
+      await sendMagicLinkEmail(email, url, ttlMin);
+    } catch (e) {
+      console.error("[magic-link email]", e.message);
+      return res.status(502).json({
+        success: false,
+        message: "Could not send the sign-in email right now. Please try again in a moment.",
+        ...(isProd ? {} : { detail: e.message, devLink: url }),
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        message: "Magic link sent if the email is valid",
+        ...(isProd ? {} : { devLink: url }),
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -139,6 +173,46 @@ router.post("/magic-link/verify", async (req, res) => {
       await user.save();
     }
 
+    // Cross-device: stamp the user so the requesting device's poll can claim it.
+    if (record.deviceId) {
+      record.verifiedUserId = user._id;
+      await record.save();
+    }
+
+    const team = await ensureTeamForUser(user);
+    const jwt  = signToken(user._id.toString());
+    res.json({
+      success: true,
+      data: { token: jwt, userId: user._id, email: user.email, fullName: user.fullName, teamId: team._id },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/auth/magic-link/poll  { deviceId }
+// Cross-device sign-in: the device that REQUESTED the link polls here. Once the
+// link is opened (verified) on ANY device, this returns a fresh session and
+// deletes the record (one-time claim — the deviceId can't lift it twice).
+router.post("/magic-link/poll", async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+    if (!deviceId || String(deviceId).length < 16) {
+      return res.status(400).json({ success: false, message: "Valid deviceId required" });
+    }
+
+    const record = await MagicLinkToken.findOne({
+      deviceId: String(deviceId),
+      verifiedUserId: { $ne: null },
+      expiresAt: { $gt: new Date() },
+    });
+    if (!record) return res.json({ success: true, data: { pending: true } });
+
+    const user = await User.findById(record.verifiedUserId);
+    if (!user) return res.json({ success: true, data: { pending: true } });
+
+    await MagicLinkToken.deleteOne({ _id: record._id }); // one-time claim
+
     const team = await ensureTeamForUser(user);
     const jwt  = signToken(user._id.toString());
     res.json({
@@ -155,12 +229,32 @@ router.get("/me", requireAuth, (req, res) => {
   res.json({
     success: true,
     data: {
-      id:        req.user._id,
-      email:     req.user.email,
-      fullName:  req.user.fullName,
-      avatarUrl: req.user.avatarUrl,
+      id:         req.user._id,
+      email:      req.user.email,
+      fullName:   req.user.fullName,
+      avatarUrl:  req.user.avatarUrl,
+      createdAt:  req.user.createdAt,
+      lastLoginAt: req.user.lastLoginAt,
     },
   });
+});
+
+// PUT /api/auth/me — update own profile (name / avatar)
+router.put("/me", requireAuth, async (req, res) => {
+  try {
+    const { fullName, avatarUrl } = req.body;
+    const update = {};
+    if (typeof fullName === "string" && fullName.trim()) update.fullName = fullName.trim();
+    if (typeof avatarUrl === "string") update.avatarUrl = avatarUrl;
+
+    const user = await User.findByIdAndUpdate(req.user._id, update, { new: true }).select("-passwordHash");
+    res.json({
+      success: true,
+      data: { id: user._id, email: user.email, fullName: user.fullName, avatarUrl: user.avatarUrl },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 export default router;

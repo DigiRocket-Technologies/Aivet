@@ -7,31 +7,49 @@ const userSchema = new Schema({
   passwordHash:  { type: String },
   fullName:      { type: String, required: true },
   avatarUrl:     { type: String },
-  oauthProvider: { type: String },
-  oauthId:       { type: String },
-  isVerified:    { type: Boolean, default: false },
-  isActive:      { type: Boolean, default: true },
+  oauthProvider: { type: String, index: true },
+  oauthId:       { type: String, index: true },
+  isVerified:    { type: Boolean, default: false, index: true },
+  isActive:      { type: Boolean, default: true, index: true },
   lastLoginAt:   { type: Date },
 }, { timestamps: true });
+
+// Additional indexes for user queries (email uniqueness comes from the field above)
+userSchema.index({ oauthProvider: 1, oauthId: 1 });
+userSchema.index({ isActive: 1, isVerified: 1 });
+userSchema.index({ createdAt: -1 });
 
 // ── Team ──────────────────────────────────────────────────────────────────
 const teamSchema = new Schema({
   name:    { type: String, required: true },
   slug:    { type: String, required: true, unique: true },
-  ownerId: { type: Schema.Types.ObjectId, ref: "User", required: true },
-  plan:    { type: String, enum: ["free","starter","pro","enterprise"], default: "free" },
+  ownerId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  plan:    { type: String, enum: ["free","starter","pro","enterprise"], default: "free", index: true },
   members: [{ userId: { type: Schema.Types.ObjectId, ref: "User" }, role: { type: String, default: "member" }, joinedAt: Date }],
 }, { timestamps: true });
 
+// Additional indexes for team queries (slug uniqueness + ownerId come from the fields above)
+teamSchema.index({ "members.userId": 1 });
+teamSchema.index({ plan: 1, createdAt: -1 });
+
 // ── Magic-Link Token ──────────────────────────────────────────────────────
 const magicLinkTokenSchema = new Schema({
-  email:     { type: String, required: true, lowercase: true, index: true },
+  email:     { type: String, required: true, lowercase: true },
   tokenHash: { type: String, required: true, unique: true },
-  expiresAt: { type: Date,   required: true, index: true },
+  expiresAt: { type: Date,   required: true },
   usedAt:    { type: Date },
   purpose:   { type: String, enum: ["login","signup"], default: "login" },
+  // Cross-device sign-in: the requesting device sends a random deviceId; once the
+  // link is opened (verified) on any device we stamp verifiedUserId, and the
+  // requesting device polls to claim the session.
+  deviceId:       { type: String, index: true },
+  verifiedUserId: { type: Schema.Types.ObjectId, ref: "User" },
 }, { timestamps: true });
-magicLinkTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL
+
+// TTL and compound indexes (tokenHash uniqueness comes from the field above)
+magicLinkTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL auto-delete
+magicLinkTokenSchema.index({ email: 1, purpose: 1 });
+magicLinkTokenSchema.index({ usedAt: 1 }, { sparse: true });
 
 // ── Project ───────────────────────────────────────────────────────────────
 const projectSchema = new Schema({
@@ -43,6 +61,20 @@ const projectSchema = new Schema({
   targetRegion: { type: String, default: "global" },
   isActive:     { type: Boolean, default: true },
   competitors:  [{ domain: String, brandName: String, addedAt: { type: Date, default: Date.now } }],
+
+  // ── Onboarding "business summary" (AI-generated when a brand is added) ─────
+  businessType:         { type: String },               // e.g. "E-commerce & Technology"
+  language:             { type: String },               // display, e.g. "English"
+  languageCode:         { type: String, default: "en" }, // ISO 639-1, e.g. "en"
+  country:              { type: String },               // display, e.g. "India"
+  countryCode:          { type: String },               // ISO 3166-1 alpha-2, e.g. "IN"
+  about:                [String],                        // bullet points about the business
+  competitiveAdvantage: { type: String },
+  keyFeatures:          [String],                        // bullet points
+  targetCustomers:      [String],                        // bullet points
+  topics:               [String],                        // suggested topic clusters
+  sitemaps:             [String],                        // optional sitemap URLs
+  keywords:             [{ keyword: String, searchVolume: Number, difficulty: Number }],
 }, { timestamps: true });
 
 // ── Prompt Campaign ───────────────────────────────────────────────────────
@@ -60,10 +92,10 @@ const campaignSchema = new Schema({
 const promptRunSchema = new Schema({
   campaignId:   { type: Schema.Types.ObjectId, ref: "Campaign", required: true, index: true },
   projectId:    { type: Schema.Types.ObjectId, ref: "Project",  required: true, index: true },
-  promptText:   { type: String, required: true },
+  promptText:   { type: String, required: true, index: true },
   status:       { type: String, enum: ["pending","running","completed","failed"], default: "pending", index: true },
-  startedAt:    { type: Date },
-  completedAt:  { type: Date },
+  startedAt:    { type: Date, index: true },
+  completedAt:  { type: Date, index: true },
   errorMessage: { type: String },
   responses: [{
     model:        String,
@@ -90,6 +122,13 @@ const promptRunSchema = new Schema({
   }],
 }, { timestamps: true });
 
+// Performance indexes for prompt runs
+promptRunSchema.index({ campaignId: 1, status: 1 });
+promptRunSchema.index({ projectId: 1, status: 1, createdAt: -1 });
+promptRunSchema.index({ status: 1, createdAt: -1 });
+promptRunSchema.index({ completedAt: -1 }, { sparse: true });
+promptRunSchema.index({ projectId: 1, completedAt: -1 });
+
 // ── Visibility Score ──────────────────────────────────────────────────────
 const visibilityScoreSchema = new Schema({
   projectId:       { type: Schema.Types.ObjectId, ref: "Project", required: true, index: true },
@@ -105,6 +144,11 @@ const visibilityScoreSchema = new Schema({
   modelsBreakdown: { type: Map, of: Number },
 }, { timestamps: true });
 visibilityScoreSchema.index({ projectId: 1, scoreDate: 1 }, { unique: true });
+// Performance indexes for visibility scores
+visibilityScoreSchema.index({ projectId: 1, scoreDate: -1 });
+visibilityScoreSchema.index({ scoreDate: -1 });
+visibilityScoreSchema.index({ overallScore: -1 });
+visibilityScoreSchema.index({ projectId: 1, createdAt: -1 });
 
 // ── Subscription ──────────────────────────────────────────────────────────
 const subscriptionSchema = new Schema({
@@ -129,7 +173,15 @@ const auditLogSchema = new Schema({
   ipAddress:{ type: String },
 }, { timestamps: true });
 
+// ── Domain Authority cache (DataForSEO Labs traffic → 0-100) ───────────────
+const domainAuthoritySchema = new Schema({
+  domain:    { type: String, required: true, unique: true, lowercase: true, trim: true },
+  authority: { type: Number, default: 0 },
+  etv:       { type: Number, default: 0 },
+}, { timestamps: true });
+
 export const User             = models.User             || model("User",            userSchema);
+export const DomainAuthority  = models.DomainAuthority  || model("DomainAuthority", domainAuthoritySchema);
 export const Team             = models.Team             || model("Team",            teamSchema);
 export const MagicLinkToken   = models.MagicLinkToken   || model("MagicLinkToken",  magicLinkTokenSchema);
 export const Project          = models.Project          || model("Project",         projectSchema);

@@ -1,125 +1,240 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
-import { Bot, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  Bot, Eye, EyeOff, ArrowRight, Loader2, AlertCircle, Mail, Lock,
+  Check, Sparkles, TrendingUp, MailCheck, ChevronDown,
+} from "lucide-react";
+import { authApi, type AuthResult } from "@/lib/api/auth";
+import { projectsApi } from "@/lib/api/projects";
+import { useAuthStore } from "@/lib/stores/authStore";
+
+const LIME = "#C9F31D";
+const FEATURES = [
+  "AI Visibility Score across every engine",
+  "Competitor share-of-voice tracking",
+  "GEO recommendations that move the needle",
+];
+const ENGINES = [
+  { label: "ChatGPT", color: "#10A37F" },
+  { label: "Gemini", color: "#1A73E8" },
+  { label: "Claude", color: "#D97757" },
+  { label: "Perplexity", color: "#22B8CF" },
+];
 
 export default function LoginPage() {
+  const router = useRouter();
+  const setAuth = useAuthStore((s) => s.setAuth);
+  const setProject = useAuthStore((s) => s.setProject);
+
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const deviceIdRef = useRef<string | null>(null);
+
+  // Password (dev) fallback
+  const [showPwd, setShowPwd] = useState(false);
+  const [pwdEmail, setPwdEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
+  const [pwdLoading, setPwdLoading] = useState(false);
+
+  async function finishAuth(res: AuthResult) {
+    setAuth(res.token, { id: res.userId, email: res.email, full_name: res.fullName });
+    const projects = await projectsApi.list().catch(() => []);
+    if (projects.length) {
+      const p = projects[0];
+      setProject({ id: p._id, name: p.name, domain: p.domain, brandName: p.brandName });
+    }
+    router.push("/overview");
+  }
+
+  function newDeviceId() {
+    try {
+      if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID() + crypto.randomUUID();
+    } catch { /* fall through */ }
+    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Date.now();
+  }
+
+  async function sendMagicLink(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim()) return setError("Enter your email");
+    setError(null); setSending(true);
+    const deviceId = newDeviceId();
+    deviceIdRef.current = deviceId;
+    try {
+      await authApi.magicLinkSend(email.trim(), deviceId);
+      setSent(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send link");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Cross-device sign-in: once the link is sent, poll until it's opened on ANY
+  // device (e.g. the user's phone) — then this device logs in automatically.
+  useEffect(() => {
+    if (!sent || !deviceIdRef.current) return;
+    let stopped = false;
+    const id = setInterval(async () => {
+      try {
+        const res = await authApi.magicLinkPoll(deviceIdRef.current!);
+        if (stopped || !res?.token) return;
+        clearInterval(id);
+        await finishAuth(res as AuthResult);
+      } catch { /* keep polling */ }
+    }, 3000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [sent]);
+
+  async function passwordLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null); setPwdLoading(true);
+    try {
+      const res = await authApi.login(pwdEmail.trim(), password);
+      await finishAuth(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign in failed");
+      setPwdLoading(false);
+    }
+  }
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4"
-      style={{ background: "#0E0F11" }}
-    >
-      <div className="w-full max-w-[400px] space-y-6">
+    <div className="min-h-screen flex" style={{ background: "#0E0F11" }}>
 
-        {/* Logo */}
-        <div className="flex flex-col items-center gap-3 mb-8">
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center"
-            style={{ background: "#C9F31D" }}>
+      {/* Left — brand showcase */}
+      <div className="hidden lg:flex flex-col justify-between relative overflow-hidden" style={{ width: "46%", padding: "48px 56px", background: "linear-gradient(160deg, #111314 0%, #0B0C0E 60%, #0E0F11 100%)", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
+        <div className="auth-glow" style={{ position: "absolute", top: "-120px", left: "-80px", width: 420, height: 420, borderRadius: "50%", background: "radial-gradient(circle, rgba(201,243,29,0.16) 0%, rgba(201,243,29,0) 70%)", pointerEvents: "none" }} />
+        <div style={{ position: "absolute", bottom: "-140px", right: "-100px", width: 380, height: 380, borderRadius: "50%", background: "radial-gradient(circle, rgba(34,184,207,0.10) 0%, rgba(34,184,207,0) 70%)", pointerEvents: "none" }} />
+
+        <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 11, background: LIME, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 24px rgba(201,243,29,0.35)" }}>
             <Bot size={22} color="#000" strokeWidth={2.5} />
           </div>
-          <div className="text-center">
-            <h1 className="text-[22px] font-bold text-white">Welcome back</h1>
-            <p className="text-[13px] mt-1" style={{ color: "rgba(255,255,255,0.55)" }}>
-              Sign in to your AIVet account
-            </p>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "#fff", letterSpacing: "-0.4px" }}>AIVet</span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 5, background: "rgba(201,243,29,0.12)", color: LIME, letterSpacing: "0.04em" }}>PRO</span>
+        </div>
+
+        <div style={{ position: "relative" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 18, padding: "5px 11px", borderRadius: 20, background: "rgba(201,243,29,0.08)", border: "1px solid rgba(201,243,29,0.20)" }}>
+            <Sparkles size={12} style={{ color: LIME }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: LIME }}>AI Visibility &amp; GEO Platform</span>
+          </div>
+          <h2 style={{ fontSize: 38, fontWeight: 700, color: "#fff", lineHeight: 1.12, letterSpacing: "-0.8px", margin: 0 }}>See how AI<br />sees your brand.</h2>
+          <p style={{ fontSize: 15, color: "rgba(255,255,255,0.55)", marginTop: 16, maxWidth: 380, lineHeight: 1.6 }}>Track your visibility across ChatGPT, Gemini, Claude &amp; Perplexity — all from one dashboard.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 32 }}>
+            {FEATURES.map((f) => (
+              <div key={f} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 22, height: 22, borderRadius: 7, flexShrink: 0, background: "rgba(201,243,29,0.14)", display: "flex", alignItems: "center", justifyContent: "center" }}><Check size={13} style={{ color: LIME }} strokeWidth={3} /></div>
+                <span style={{ fontSize: 14, color: "rgba(255,255,255,0.78)" }}>{f}</span>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Google OAuth */}
-        <button
-          className="w-full flex items-center justify-center gap-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors"
-          style={{
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.12)",
-            color: "rgba(255,255,255,0.85)",
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24">
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-          </svg>
-          Continue with Google
-        </button>
-
-        {/* Divider */}
-        <div className="flex items-center gap-3">
-          <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
-          <span className="text-[11px]" style={{ color: "rgba(255,255,255,0.30)" }}>or</span>
-          <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
-        </div>
-
-        {/* Form */}
-        <div className="space-y-3">
-          <div>
-            <label className="block text-[11px] font-medium mb-1.5"
-              style={{ color: "rgba(255,255,255,0.55)" }}>
-              Email
-            </label>
-            <input
-              type="email"
-              placeholder="you@company.com"
-              className="w-full px-3 py-2.5 rounded-xl text-[13px] outline-none transition-colors placeholder:text-[rgba(255,255,255,0.25)]"
-              style={{
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.12)",
-                color: "#fff",
-              }}
-            />
+        <div style={{ position: "relative" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 22 }}>
+            {ENGINES.map((e) => (
+              <span key={e.label} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 7, background: `${e.color}14`, border: `1px solid ${e.color}30`, color: e.color }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: e.color }} />{e.label}
+              </span>
+            ))}
           </div>
-
-          <div>
-            <label className="block text-[11px] font-medium mb-1.5"
-              style={{ color: "rgba(255,255,255,0.55)" }}>
-              Password
-            </label>
-            <div className="relative">
-              <input
-                type={showPass ? "text" : "password"}
-                placeholder="••••••••"
-                className="w-full px-3 py-2.5 pr-10 rounded-xl text-[13px] outline-none transition-colors placeholder:text-[rgba(255,255,255,0.25)]"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  color: "#fff",
-                }}
-              />
-              <button
-                onClick={() => setShowPass(!showPass)}
-                className="absolute right-3 top-1/2 -translate-y-1/2"
-              >
-                {showPass
-                  ? <EyeOff size={14} style={{ color: "rgba(255,255,255,0.40)" }} />
-                  : <Eye size={14} style={{ color: "rgba(255,255,255,0.40)" }} />
-                }
-              </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", maxWidth: 320 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: "rgba(201,243,29,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}><TrendingUp size={20} style={{ color: LIME }} /></div>
+            <div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}><span style={{ fontSize: 24, fontWeight: 700, color: "#fff", lineHeight: 1 }}>+31%</span><span style={{ fontSize: 11, fontWeight: 600, color: LIME }}>this month</span></div>
+              <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "4px 0 0" }}>avg. visibility growth for tracked brands</p>
             </div>
           </div>
+        </div>
+      </div>
 
-          <div className="flex items-center justify-end">
-            <Link href="/forgot-password" className="text-[12px]"
-              style={{ color: "#C9F31D" }}>
-              Forgot password?
-            </Link>
+      {/* Right — sign-in */}
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full" style={{ maxWidth: 396 }}>
+          <div className="lg:hidden flex items-center gap-2.5 mb-8">
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: LIME, display: "flex", alignItems: "center", justifyContent: "center" }}><Bot size={19} color="#000" strokeWidth={2.5} /></div>
+            <span style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>AIVet</span>
           </div>
 
-          <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold btn-lime">
-            Sign In
-            <ArrowRight size={14} />
-          </button>
+          {error && (
+            <div className="flex items-center gap-2 mb-4" style={{ padding: "10px 12px", borderRadius: 10, fontSize: 12.5, background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)", color: "#EF4444" }}>
+              <AlertCircle size={15} style={{ flexShrink: 0 }} /> {error}
+            </div>
+          )}
+
+          {sent ? (
+            // Check your email
+            <div>
+              <div style={{ width: 48, height: 48, borderRadius: 13, background: "rgba(201,243,29,0.12)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18 }}>
+                <MailCheck size={24} style={{ color: LIME }} />
+              </div>
+              <h1 style={{ fontSize: 24, fontWeight: 700, color: "#fff", letterSpacing: "-0.5px", margin: 0 }}>Check your email</h1>
+              <p style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", marginTop: 8, lineHeight: 1.6 }}>
+                We sent a sign-in link to <span style={{ color: "#fff", fontWeight: 600 }}>{email}</span>. It expires in 15 minutes and can be used once.
+              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 18, padding: "11px 13px", borderRadius: 10, background: "rgba(201,243,29,0.06)", border: "1px solid rgba(201,243,29,0.18)" }}>
+                <Loader2 size={15} className="auth-spin" style={{ color: LIME, flexShrink: 0 }} />
+                <span style={{ fontSize: 12.5, color: "rgba(255,255,255,0.7)", lineHeight: 1.5, textAlign: "left" }}>
+                  Waiting for you to open it… you can open the link on your <strong style={{ color: "#fff" }}>phone</strong> — this page will sign you in automatically.
+                </span>
+              </div>
+              <button onClick={() => setSent(false)} style={{ marginTop: 18, background: "none", border: "none", color: "rgba(255,255,255,0.5)", fontSize: 12.5, cursor: "pointer", textDecoration: "underline" }}>
+                Use a different email
+              </button>
+            </div>
+          ) : (
+            <>
+              <h1 style={{ fontSize: 26, fontWeight: 700, color: "#fff", letterSpacing: "-0.5px", margin: 0 }}>Welcome back</h1>
+              <p style={{ fontSize: 14, color: "rgba(255,255,255,0.50)", marginTop: 6, marginBottom: 24 }}>Sign in with a secure magic link — no password needed.</p>
+
+              {/* Magic link form */}
+              <form onSubmit={sendMagicLink} className="space-y-3">
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.60)", marginBottom: 7 }}>Email</label>
+                  <div style={{ position: "relative" }}>
+                    <Mail size={15} style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.35)" }} />
+                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" className="auth-input" style={{ padding: "11px 13px 11px 38px" }} />
+                  </div>
+                </div>
+                <button type="submit" disabled={sending} className="w-full flex items-center justify-center gap-2 btn-lime" style={{ padding: "12px", fontSize: 14, cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.7 : 1 }}>
+                  {sending ? <><Loader2 size={15} className="auth-spin" /> Sending…</> : <>Send sign-in link <ArrowRight size={15} /></>}
+                </button>
+              </form>
+
+              {/* Password (dev) fallback */}
+              <div className="flex items-center gap-3" style={{ margin: "20px 0" }}>
+                <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
+                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.30)" }}>or</span>
+                <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.08)" }} />
+              </div>
+
+              <button onClick={() => setShowPwd((v) => !v)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)", borderRadius: 10, padding: "10px", color: "rgba(255,255,255,0.7)", fontSize: 12.5, fontWeight: 500, cursor: "pointer" }}>
+                <Lock size={13} /> Sign in with password (dev)
+                <ChevronDown size={13} style={{ transform: showPwd ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+              </button>
+
+              {showPwd && (
+                <form onSubmit={passwordLogin} className="space-y-3 animate-fade-in" style={{ marginTop: 12 }}>
+                  <input type="email" value={pwdEmail} onChange={(e) => setPwdEmail(e.target.value)} placeholder="email" autoComplete="email" className="auth-input" style={{ padding: "10px 13px" }} />
+                  <div style={{ position: "relative" }}>
+                    <input type={showPass ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="password" autoComplete="current-password" className="auth-input" style={{ padding: "10px 40px 10px 13px" }} />
+                    <button type="button" onClick={() => setShowPass(!showPass)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", display: "flex" }}>
+                      {showPass ? <EyeOff size={15} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Eye size={15} style={{ color: "rgba(255,255,255,0.4)" }} />}
+                    </button>
+                  </div>
+                  <button type="submit" disabled={pwdLoading} className="w-full flex items-center justify-center gap-2" style={{ padding: "11px", borderRadius: 10, fontSize: 13, fontWeight: 600, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", color: "#fff", cursor: pwdLoading ? "not-allowed" : "pointer" }}>
+                    {pwdLoading ? <><Loader2 size={14} className="auth-spin" /> Signing in…</> : "Sign In"}
+                  </button>
+                </form>
+              )}
+            </>
+          )}
         </div>
-
-        <p className="text-center text-[12px]" style={{ color: "rgba(255,255,255,0.40)" }}>
-          Don't have an account?{" "}
-          <Link href="/register" style={{ color: "#C9F31D" }}>
-            Sign up free
-          </Link>
-        </p>
-
       </div>
     </div>
   );

@@ -9,7 +9,12 @@ interface CompetitorChartProps {
 }
 
 export default function CompetitorChart({ data, brandName }: CompetitorChartProps) {
-  const max = Math.max(...data.map((d) => d.score), 1);
+  // Always show the brand, then the top competitors — capped so the fixed-height
+  // card never overflows into the section below.
+  const own = data.filter((d) => d.brand === brandName);
+  const others = data.filter((d) => d.brand !== brandName);
+  const rows = [...own, ...others].slice(0, 6);
+  const max = Math.max(...rows.map((d) => d.score), 1);
 
   return (
     <div style={{
@@ -25,8 +30,8 @@ export default function CompetitorChart({ data, brandName }: CompetitorChartProp
         Competitor Visibility Share
       </h3>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, flex: 1, justifyContent: "center" }}>
-        {data.map((item) => {
+      <div style={{ display: "flex", flexDirection: "column", gap: 11, flex: 1, minHeight: 0, overflowY: "auto", justifyContent: "flex-start" }}>
+        {rows.map((item) => {
           const band = getScoreBand(item.score);
           const isOwn = item.brand === brandName;
           const pct = (item.score / max) * 100;

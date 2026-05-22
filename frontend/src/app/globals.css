@@ -205,3 +205,31 @@ body {
   border-radius: 8px !important;
   color: #fff !important;
 }
+
+/* ── Auth / Login ───────────────────────────────────────────────────────── */
+.auth-input {
+  width: 100%;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  color: #fff;
+  font-size: 13px;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.auth-input::placeholder { color: rgba(255,255,255,0.25); }
+.auth-input:focus,
+.auth-input:focus-visible {
+  border-color: rgba(201,243,29,0.55);
+  background: rgba(255,255,255,0.06);
+  box-shadow: 0 0 0 3px rgba(201,243,29,0.12);
+  outline: none;
+}
+
+@keyframes auth-glow-float {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.55; }
+  50%      { transform: translate(20px, -18px) scale(1.08); opacity: 0.8; }
+}
+.auth-glow { animation: auth-glow-float 11s ease-in-out infinite; }
+
+@keyframes auth-spin { to { transform: rotate(360deg); } }
+.auth-spin { animation: auth-spin 0.8s linear infinite; }

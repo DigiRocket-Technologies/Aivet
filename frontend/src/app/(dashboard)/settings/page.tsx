@@ -1,519 +1,230 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import Topbar from "@/components/shared/Topbar";
-import { useState } from "react";
+import { useAuthStore } from "@/lib/stores/authStore";
+import { projectsApi } from "@/lib/api/projects";
+import { teamApi, type TeamData } from "@/lib/api/team";
+import { getApiBase } from "@/lib/apiBase";
 import {
-  Eye, EyeOff, Copy, RefreshCw, Plus, Trash2,
-  FolderOpen, Users, Key, Bell, CheckCircle2, Shield, Globe, Building2,
+  FolderOpen, Users, Key, Bell, CheckCircle2, Copy, Loader2, AlertCircle,
 } from "lucide-react";
 
-// ── Data ───────────────────────────────────────────────────────────────────
+const LIME = "#C9F31D";
+const card: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12 };
+const labelStyle: React.CSSProperties = { display: "block", fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.60)", marginBottom: 7 };
 
 const TABS = [
-  { id: "Project",       icon: FolderOpen },
-  { id: "Team",          icon: Users      },
-  { id: "API Keys",      icon: Key        },
-  { id: "Notifications", icon: Bell       },
+  { key: "project", label: "Project", icon: FolderOpen },
+  { key: "team", label: "Team", icon: Users },
+  { key: "api", label: "API & Access", icon: Key },
+  { key: "notifications", label: "Notifications", icon: Bell },
+] as const;
+
+const NOTIF_PREFS = [
+  { key: "weekly_report", label: "Weekly visibility report", desc: "Emailed summary every Monday" },
+  { key: "score_drop", label: "Score drop alerts", desc: "When your visibility score falls sharply" },
+  { key: "competitor", label: "Competitor movement", desc: "When a competitor overtakes you" },
+  { key: "campaign_done", label: "Campaign completed", desc: "When a prompt campaign finishes running" },
 ];
 
-const TEAM = [
-  { name: "John Doe",  email: "john@acme.com",  role: "Owner",  avatar: "JD", joined: "Jan 2025" },
-  { name: "Sarah Kim", email: "sarah@acme.com", role: "Admin",  avatar: "SK", joined: "Mar 2025" },
-  { name: "Mike Chen", email: "mike@acme.com",  role: "Member", avatar: "MC", joined: "May 2025" },
-];
-
-const ROLE_STYLE: Record<string, { color: string; bg: string }> = {
-  Owner:  { color: "#C9F31D", bg: "rgba(201,243,29,0.12)"  },
-  Admin:  { color: "#22B8CF", bg: "rgba(34,184,207,0.12)"  },
-  Member: { color: "rgba(255,255,255,0.55)", bg: "rgba(255,255,255,0.07)" },
+const ROLE_STYLE: Record<string, { bg: string; color: string }> = {
+  owner: { bg: "rgba(201,243,29,0.12)", color: LIME },
+  admin: { bg: "rgba(34,184,207,0.12)", color: "#22B8CF" },
+  member: { bg: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.6)" },
 };
-
-const NOTIFICATIONS = [
-  { label: "Weekly visibility summary",    desc: "Receive a weekly digest of your AI visibility score",  enabled: true  },
-  { label: "Campaign completion alerts",   desc: "Get notified when a prompt campaign finishes running", enabled: true  },
-  { label: "Score drop alerts",            desc: "Alert when your visibility score drops by 5+ points",  enabled: true  },
-  { label: "New citation detected",        desc: "Notify when a new domain cites your brand",            enabled: false },
-  { label: "Competitor score changes",     desc: "Alert when a competitor's score changes significantly",enabled: false },
-  { label: "Monthly report ready",         desc: "Email when your monthly report is generated",          enabled: true  },
-];
-
-// ── Styles ─────────────────────────────────────────────────────────────────
-
-const card: React.CSSProperties = {
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: 12,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "9px 13px",
-  borderRadius: 8,
-  fontSize: 13,
-  outline: "none",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.10)",
-  color: "#fff",
-  boxSizing: "border-box",
-};
-
-// ── Toggle ─────────────────────────────────────────────────────────────────
-
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
-  return (
-    <button
-      onClick={onChange}
-      style={{
-        width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer",
-        background: enabled ? "#C9F31D" : "rgba(255,255,255,0.12)",
-        position: "relative", flexShrink: 0, transition: "background 0.2s",
-      }}
-    >
-      <span style={{
-        position: "absolute", top: 3,
-        left: enabled ? 21 : 3,
-        width: 16, height: 16, borderRadius: "50%",
-        background: enabled ? "#000" : "rgba(255,255,255,0.55)",
-        transition: "left 0.2s",
-      }} />
-    </button>
-  );
-}
-
-// ── Component ──────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab]   = useState("Project");
-  const [showKey, setShowKey]       = useState(false);
-  const [copied, setCopied]         = useState(false);
-  const [notifs, setNotifs]         = useState(NOTIFICATIONS.map((n) => n.enabled));
+  const project   = useAuthStore((s) => s.project);
+  const projectId = useAuthStore((s) => s.projectId);
+  const user      = useAuthStore((s) => s.user);
+  const setProject = useAuthStore((s) => s.setProject);
 
-  function handleCopy() {
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
+  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("project");
+
+  // Project form
+  const [name, setName] = useState(project?.name ?? "");
+  const [brandName, setBrandName] = useState(project?.brandName ?? "");
+  const [domain, setDomain] = useState(project?.domain ?? "");
+  const [industry, setIndustry] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(project?.name ?? "");
+    setBrandName(project?.brandName ?? "");
+    setDomain(project?.domain ?? "");
+  }, [project]);
+
+  // Team
+  const [team, setTeam] = useState<TeamData | null>(null);
+  const loadTeam = useCallback(async () => {
+    try { setTeam(await teamApi.get()); } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { loadTeam(); }, [loadTeam]);
+
+  // Notifications (local prefs)
+  const [notifs, setNotifs] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { setNotifs(JSON.parse(localStorage.getItem("aivet-notif-prefs") ?? "{}")); } catch { /* ignore */ }
+  }, []);
+  const toggleNotif = (key: string) => {
+    setNotifs((prev) => {
+      const next = { ...prev, [key]: !(prev[key] ?? true) };
+      if (typeof window !== "undefined") localStorage.setItem("aivet-notif-prefs", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (text: string, id: string) => {
+    navigator.clipboard?.writeText(text);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  async function saveProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!projectId) return;
+    setSaving(true); setSaved(false); setError(null);
+    try {
+      const updated = await projectsApi.update(projectId, {
+        name: name.trim(),
+        brandName: brandName.trim(),
+        domain: domain.trim(),
+        industry: industry.trim() || undefined,
+      });
+      setProject({ id: updated._id, name: updated.name, domain: updated.domain, brandName: updated.brandName });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save");
+    } finally {
+      setSaving(false);
+    }
   }
+
+  const apiBase = getApiBase();
 
   return (
     <div style={{ background: "#0E0F11", minHeight: "100vh" }}>
-      <Topbar title="Settings" subtitle="Manage your project and account settings" />
+      <Topbar title="Settings" subtitle={project ? `${project.name} · ${project.domain}` : "Manage your workspace"} />
 
-      <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ padding: 24, display: "flex", gap: 20, alignItems: "flex-start" }}>
 
-        {/* ── Tabs ── */}
-        <div style={{
-          display: "flex", alignItems: "center", gap: 4,
-          padding: 4, borderRadius: 10, width: "fit-content",
-          background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
-        }}>
-          {TABS.map(({ id, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              style={{
-                display: "flex", alignItems: "center", gap: 7,
-                padding: "7px 16px", borderRadius: 7, border: "none", cursor: "pointer",
-                fontSize: 12, fontWeight: 600, transition: "all 0.15s",
-                background: activeTab === id ? "#C9F31D" : "transparent",
-                color: activeTab === id ? "#000" : "rgba(255,255,255,0.50)",
-              }}
-            >
-              <Icon size={13} />
-              {id}
-            </button>
-          ))}
+        {/* Tab nav */}
+        <div style={{ width: 200, flexShrink: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+          {TABS.map(({ key, label, icon: Icon }) => {
+            const active = tab === key;
+            return (
+              <button key={key} onClick={() => setTab(key)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9, border: "none", cursor: "pointer", textAlign: "left", fontSize: 13, fontWeight: active ? 600 : 500, background: active ? "rgba(201,243,29,0.10)" : "transparent", color: active ? LIME : "rgba(255,255,255,0.6)" }}>
+                <Icon size={15} /> {label}
+              </button>
+            );
+          })}
         </div>
 
-        {/* ── PROJECT TAB ── */}
-        {activeTab === "Project" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 860 }}>
+        {/* Content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
 
-            {/* Project Details */}
-            <div style={{ ...card, padding: "22px 22px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: 7,
-                  background: "rgba(201,243,29,0.12)", border: "1px solid rgba(201,243,29,0.20)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  <FolderOpen size={13} style={{ color: "#C9F31D" }} />
-                </div>
-                <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Project Details</h3>
+          {!projectId && tab === "project" ? (
+            <div style={{ ...card, padding: 40, textAlign: "center" }}>
+              <p style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", margin: 0 }}>Select or add a brand from the sidebar.</p>
+            </div>
+          ) : tab === "project" ? (
+            <form onSubmit={saveProject} style={{ ...card, padding: 24, maxWidth: 560 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: "#fff", margin: "0 0 4px" }}>Project details</h3>
+              <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "0 0 20px" }}>The brand AIVet tracks across AI engines.</p>
+
+              {error && <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 12px", borderRadius: 10, fontSize: 12.5, marginBottom: 14, background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)", color: "#EF4444" }}><AlertCircle size={15} />{error}</div>}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div><label style={labelStyle}>Project name</label><input className="auth-input" style={{ padding: "11px 13px" }} value={name} onChange={(e) => setName(e.target.value)} /></div>
+                <div><label style={labelStyle}>Brand name</label><input className="auth-input" style={{ padding: "11px 13px" }} value={brandName} onChange={(e) => setBrandName(e.target.value)} /></div>
+                <div><label style={labelStyle}>Website domain</label><input className="auth-input" style={{ padding: "11px 13px" }} value={domain} onChange={(e) => setDomain(e.target.value)} /></div>
+                <div><label style={labelStyle}>Industry <span style={{ color: "rgba(255,255,255,0.3)" }}>(optional)</span></label><input className="auth-input" style={{ padding: "11px 13px" }} value={industry} onChange={(e) => setIndustry(e.target.value)} placeholder="B2B SaaS" /></div>
               </div>
 
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 22 }}>
+                <button type="submit" disabled={saving} className="btn-lime" style={{ padding: "10px 20px", fontSize: 13, display: "flex", alignItems: "center", gap: 7, cursor: saving ? "not-allowed" : "pointer" }}>
+                  {saving ? <><Loader2 size={14} className="auth-spin" /> Saving…</> : "Save changes"}
+                </button>
+                {saved && <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, color: "#22C55E" }}><CheckCircle2 size={14} /> Saved</span>}
+              </div>
+            </form>
+          ) : tab === "team" ? (
+            <div style={{ ...card, overflow: "hidden", maxWidth: 680 }}>
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, color: "#fff", margin: 0 }}>{team?.name ?? "Team"}</h3>
+                  <p style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>{team?.members.length ?? 0} member(s) · <span style={{ textTransform: "capitalize" }}>{team?.plan ?? "free"}</span> plan</p>
+                </div>
+              </div>
+              <div>
+                {(team?.members ?? []).map((m, i) => {
+                  const rs = ROLE_STYLE[m.role] ?? ROLE_STYLE.member;
+                  return (
+                    <div key={m.userId} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 20px", borderBottom: i < (team?.members.length ?? 0) - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                      <div style={{ width: 32, height: 32, borderRadius: "50%", background: "rgba(201,243,29,0.15)", color: LIME, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        {(m.fullName || m.email || "?").charAt(0).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, color: "#fff", margin: 0 }}>{m.fullName}</p>
+                        <p style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", margin: 0 }}>{m.email}</p>
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 20, textTransform: "capitalize", background: rs.bg, color: rs.color }}>{m.role}</span>
+                    </div>
+                  );
+                })}
+                {!team && <p style={{ fontSize: 12.5, color: "rgba(255,255,255,0.4)", padding: "18px 20px", textAlign: "center" }}>Loading team…</p>}
+              </div>
+            </div>
+          ) : tab === "api" ? (
+            <div style={{ ...card, padding: 24, maxWidth: 620 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: "#fff", margin: "0 0 4px" }}>API &amp; Access</h3>
+              <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "0 0 20px" }}>Reference details for integrating with the AIVet API.</p>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {[
-                  { label: "Project Name",  value: "Acme Corp",    icon: Building2 },
-                  { label: "Domain",        value: "acmecorp.com", icon: Globe     },
-                  { label: "Brand Name",    value: "Acme Corp",    icon: Shield    },
-                  { label: "Industry",      value: "SaaS / B2B",   icon: FolderOpen },
-                  { label: "Target Region", value: "Global",       icon: Globe     },
-                ].map(({ label, value }) => (
-                  <div key={label}>
-                    <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.42)", marginBottom: 6, letterSpacing: "0.04em" }}>
-                      {label.toUpperCase()}
-                    </label>
-                    <input defaultValue={value} style={inputStyle} />
-                  </div>
-                ))}
-
-                <button style={{
-                  marginTop: 4, padding: "9px 20px", borderRadius: 8, border: "none", cursor: "pointer",
-                  background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700, alignSelf: "flex-start",
-                }}>
-                  Save Changes
-                </button>
-              </div>
-            </div>
-
-            {/* Danger Zone */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ ...card, padding: "22px 22px" }}>
-                <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: "0 0 6px 0" }}>Project Info</h3>
-                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.40)", margin: "0 0 16px 0" }}>
-                  Created January 12, 2025 · Plan: Pro
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {[
-                    { label: "Prompts tracked", value: "742" },
-                    { label: "Campaigns active", value: "3"  },
-                    { label: "Competitors",       value: "4"  },
-                    { label: "Team members",      value: "3"  },
-                  ].map(({ label, value }) => (
-                    <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: 12, color: "rgba(255,255,255,0.42)" }}>{label}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{value}</span>
+                {[{ label: "API base URL", value: apiBase, id: "api" }, { label: "Project ID", value: projectId ?? "—", id: "pid" }, { label: "Account email", value: user?.email ?? "—", id: "email" }].map((row) => (
+                  <div key={row.id}>
+                    <label style={labelStyle}>{row.label}</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input readOnly className="auth-input" style={{ padding: "11px 13px", flex: 1, fontFamily: "monospace", fontSize: 12 }} value={row.value} />
+                      <button type="button" onClick={() => copy(row.value, row.id)} className="btn-ghost" style={{ padding: "0 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                        {copied === row.id ? <CheckCircle2 size={14} style={{ color: "#22C55E" }} /> : <Copy size={14} />} {copied === row.id ? "Copied" : "Copy"}
+                      </button>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{
-                ...card,
-                padding: "22px 22px",
-                border: "1px solid rgba(239,68,68,0.18)",
-                background: "rgba(239,68,68,0.03)",
-              }}>
-                <h3 style={{ fontSize: 13, fontWeight: 700, color: "#EF4444", margin: "0 0 6px 0" }}>Danger Zone</h3>
-                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.40)", margin: "0 0 16px 0" }}>
-                  These actions are irreversible. Please proceed with caution.
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <button style={{
-                    padding: "8px 14px", borderRadius: 8, cursor: "pointer", textAlign: "left",
-                    background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.18)",
-                    color: "#EF4444", fontSize: 12, fontWeight: 600,
-                  }}>
-                    Reset all campaign data
-                  </button>
-                  <button style={{
-                    padding: "8px 14px", borderRadius: 8, cursor: "pointer", textAlign: "left",
-                    background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.18)",
-                    color: "#EF4444", fontSize: 12, fontWeight: 600,
-                  }}>
-                    Delete project
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── TEAM TAB ── */}
-        {activeTab === "Team" && (
-          <div style={{ maxWidth: 720 }}>
-            <div style={{ ...card, overflow: "hidden" }}>
-              <div style={{
-                padding: "14px 20px",
-                borderBottom: "1px solid rgba(255,255,255,0.07)",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{
-                    width: 24, height: 24, borderRadius: 6,
-                    background: "rgba(201,243,29,0.12)", border: "1px solid rgba(201,243,29,0.20)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}>
-                    <Users size={12} style={{ color: "#C9F31D" }} />
-                  </div>
-                  <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Team Members</h3>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 20,
-                    background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.45)",
-                  }}>
-                    {TEAM.length}
-                  </span>
-                </div>
-                <button style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "6px 14px", borderRadius: 7, border: "none", cursor: "pointer",
-                  background: "#C9F31D", color: "#000", fontSize: 12, fontWeight: 700,
-                }}>
-                  <Plus size={12} />
-                  Invite Member
-                </button>
-              </div>
-
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                      {["Member", "Role", "Joined", ""].map((h) => (
-                        <th key={h} style={{
-                          padding: "9px 16px", textAlign: "left",
-                          fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
-                          color: "rgba(255,255,255,0.28)", textTransform: "uppercase", whiteSpace: "nowrap",
-                        }}>
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {TEAM.map((m, i) => {
-                      const roleStyle = ROLE_STYLE[m.role];
-                      return (
-                        <tr
-                          key={m.email}
-                          style={{
-                            borderBottom: i < TEAM.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
-                            transition: "background 0.15s",
-                          }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.025)"; }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                        >
-                          {/* Member */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <div style={{
-                                width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
-                                background: "rgba(201,243,29,0.12)", border: "1px solid rgba(201,243,29,0.20)",
-                                display: "flex", alignItems: "center", justifyContent: "center",
-                                fontSize: 11, fontWeight: 800, color: "#C9F31D",
-                              }}>
-                                {m.avatar}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{m.name}</div>
-                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 1 }}>{m.email}</div>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Role */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <span style={{
-                              fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 20,
-                              background: roleStyle.bg, color: roleStyle.color, letterSpacing: "0.04em",
-                            }}>
-                              {m.role}
-                            </span>
-                          </td>
-
-                          {/* Joined */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.38)" }}>{m.joined}</span>
-                          </td>
-
-                          {/* Actions */}
-                          <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
-                            {m.role !== "Owner" ? (
-                              <button style={{
-                                width: 28, height: 28, borderRadius: 7, border: "none", cursor: "pointer",
-                                background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)",
-                                display: "flex", alignItems: "center", justifyContent: "center",
-                                transition: "background 0.15s",
-                              }}
-                                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.18)"; }}
-                                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.08)"; }}
-                              >
-                                <Trash2 size={12} style={{ color: "#EF4444" }} />
-                              </button>
-                            ) : (
-                              <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "rgba(255,255,255,0.25)" }}>
-                                <Shield size={11} />
-                                Protected
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── API KEYS TAB ── */}
-        {activeTab === "API Keys" && (
-          <div style={{ maxWidth: 600 }}>
-            <div style={{ ...card, padding: "22px 22px", display: "flex", flexDirection: "column", gap: 20 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: 7,
-                  background: "rgba(192,132,252,0.12)", border: "1px solid rgba(192,132,252,0.20)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  <Key size={13} style={{ color: "#C084FC" }} />
-                </div>
-                <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Your API Key</h3>
-              </div>
-
-              <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: 0, lineHeight: 1.6 }}>
-                Use this key to access the AIVet API programmatically. Keep it secret — do not share or expose it in client-side code.
-              </p>
-
-              {/* Key display */}
-              <div>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.42)", marginBottom: 8, letterSpacing: "0.04em" }}>
-                  SECRET KEY
-                </label>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{
-                    flex: 1, display: "flex", alignItems: "center",
-                    padding: "10px 14px", borderRadius: 8,
-                    background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)",
-                    fontFamily: "monospace", fontSize: 13, color: "rgba(255,255,255,0.70)",
-                    letterSpacing: showKey ? "0.02em" : "0.12em",
-                    overflow: "hidden", whiteSpace: "nowrap",
-                  }}>
-                    {showKey ? "aivet_live_sk_a8f3d2c1e9b4f7a2d6e8c3b1" : "aivet_live_sk_••••••••••••••••••••••••"}
-                  </div>
-                  <button
-                    onClick={() => setShowKey(!showKey)}
-                    style={{
-                      width: 36, height: 36, borderRadius: 8, border: "1px solid rgba(255,255,255,0.09)",
-                      background: "rgba(255,255,255,0.06)", cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      transition: "background 0.15s",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.10)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
-                  >
-                    {showKey
-                      ? <EyeOff size={14} style={{ color: "rgba(255,255,255,0.55)" }} />
-                      : <Eye    size={14} style={{ color: "rgba(255,255,255,0.55)" }} />}
-                  </button>
-                  <button
-                    onClick={handleCopy}
-                    style={{
-                      width: 36, height: 36, borderRadius: 8, cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      background: copied ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.06)",
-                      border: copied ? "1px solid rgba(34,197,94,0.25)" : "1px solid rgba(255,255,255,0.09)",
-                      transition: "all 0.15s",
-                    }}
-                  >
-                    {copied
-                      ? <CheckCircle2 size={14} style={{ color: "#22C55E" }} />
-                      : <Copy size={14} style={{ color: "rgba(255,255,255,0.55)" }} />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Key meta */}
-              <div style={{
-                padding: "12px 14px", borderRadius: 8,
-                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-              }}>
-                {[
-                  { label: "Created",      value: "Jan 12, 2025" },
-                  { label: "Last used",    value: "2 hours ago"  },
-                  { label: "Permissions",  value: "Read + Write" },
-                ].map(({ label, value }) => (
-                  <div key={label}>
-                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.30)", marginBottom: 3 }}>{label}</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.70)" }}>{value}</div>
                   </div>
                 ))}
               </div>
-
-              {/* Regenerate */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button style={{
-                  display: "flex", alignItems: "center", gap: 7,
-                  padding: "8px 16px", borderRadius: 8, cursor: "pointer",
-                  background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.18)",
-                  color: "#EF4444", fontSize: 12, fontWeight: 600,
-                }}>
-                  <RefreshCw size={13} />
-                  Regenerate Key
-                </button>
-                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.28)" }}>
-                  This will invalidate your current key immediately.
-                </span>
-              </div>
+              <p style={{ fontSize: 11.5, color: "rgba(255,255,255,0.35)", margin: "16px 0 0" }}>Authenticate requests with your session token via the <code style={{ color: "rgba(255,255,255,0.6)" }}>Authorization: Bearer</code> header.</p>
             </div>
-          </div>
-        )}
-
-        {/* ── NOTIFICATIONS TAB ── */}
-        {activeTab === "Notifications" && (
-          <div style={{ maxWidth: 620 }}>
-            <div style={{ ...card, overflow: "hidden" }}>
-              <div style={{
-                padding: "14px 20px",
-                borderBottom: "1px solid rgba(255,255,255,0.07)",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{
-                    width: 24, height: 24, borderRadius: 6,
-                    background: "rgba(34,184,207,0.12)", border: "1px solid rgba(34,184,207,0.20)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}>
-                    <Bell size={12} style={{ color: "#22B8CF" }} />
-                  </div>
-                  <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Email Notifications</h3>
-                </div>
-                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
-                  {notifs.filter(Boolean).length} of {notifs.length} enabled
-                </span>
+          ) : (
+            <div style={{ ...card, overflow: "hidden", maxWidth: 620 }}>
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+                <h3 style={{ fontSize: 14, fontWeight: 600, color: "#fff", margin: 0 }}>Notification preferences</h3>
+                <p style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>Saved on this device.</p>
               </div>
-
               <div>
-                {NOTIFICATIONS.map((n, i) => (
-                  <div
-                    key={n.label}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 16,
-                      padding: "16px 20px",
-                      borderBottom: i < NOTIFICATIONS.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none",
-                      transition: "background 0.15s",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.02)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", marginBottom: 3 }}>{n.label}</div>
-                      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>{n.desc}</div>
+                {NOTIF_PREFS.map((n, i) => {
+                  const on = notifs[n.key] ?? true;
+                  return (
+                    <div key={n.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 20px", borderBottom: i < NOTIF_PREFS.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                      <div style={{ flex: 1 }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, color: "#fff", margin: 0 }}>{n.label}</p>
+                        <p style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>{n.desc}</p>
+                      </div>
+                      <button onClick={() => toggleNotif(n.key)} style={{ width: 40, height: 22, borderRadius: 20, border: "none", cursor: "pointer", padding: 2, background: on ? LIME : "rgba(255,255,255,0.15)", transition: "background .15s", display: "flex", justifyContent: on ? "flex-end" : "flex-start" }}>
+                        <span style={{ width: 18, height: 18, borderRadius: "50%", background: on ? "#000" : "#fff", display: "block" }} />
+                      </button>
                     </div>
-                    <Toggle
-                      enabled={notifs[i]}
-                      onChange={() => setNotifs((prev) => prev.map((v, j) => j === i ? !v : v))}
-                    />
-                  </div>
-                ))}
-              </div>
-
-              <div style={{
-                padding: "14px 20px",
-                borderTop: "1px solid rgba(255,255,255,0.07)",
-                display: "flex", justifyContent: "flex-end",
-              }}>
-                <button style={{
-                  padding: "8px 20px", borderRadius: 8, border: "none", cursor: "pointer",
-                  background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700,
-                }}>
-                  Save Preferences
-                </button>
+                  );
+                })}
               </div>
             </div>
-          </div>
-        )}
-
+          )}
+        </div>
       </div>
     </div>
   );

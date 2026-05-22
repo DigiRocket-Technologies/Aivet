@@ -54,6 +54,7 @@ router.post(
           }
           break;
         }
+        case "customer.subscription.created":
         case "customer.subscription.updated":
         case "customer.subscription.deleted": {
           const sub = event.data.object;
@@ -66,7 +67,7 @@ router.post(
             { stripeSubId: sub.id },
             {
               plan,
-              status:            sub.status,
+              status:            event.type === "customer.subscription.deleted" ? "canceled" : sub.status,
               currentPeriodEnd:  new Date(sub.current_period_end * 1000),
               cancelAtPeriodEnd: sub.cancel_at_period_end,
               ...limits,
@@ -74,6 +75,26 @@ router.post(
             { new: true }
           );
           if (dbSub?.teamId) await Team.findByIdAndUpdate(dbSub.teamId, { plan });
+          break;
+        }
+        case "invoice.payment_failed": {
+          const subId = typeof event.data.object.subscription === "string"
+            ? event.data.object.subscription
+            : event.data.object.subscription?.id;
+          if (subId) await Subscription.findOneAndUpdate({ stripeSubId: subId }, { status: "past_due" });
+          break;
+        }
+        case "invoice.payment_succeeded": {
+          const subId = typeof event.data.object.subscription === "string"
+            ? event.data.object.subscription
+            : event.data.object.subscription?.id;
+          if (subId) {
+            const stripeSub = await stripe.subscriptions.retrieve(subId);
+            await Subscription.findOneAndUpdate(
+              { stripeSubId: subId },
+              { status: stripeSub.status, currentPeriodEnd: new Date(stripeSub.current_period_end * 1000) }
+            );
+          }
           break;
         }
         default:

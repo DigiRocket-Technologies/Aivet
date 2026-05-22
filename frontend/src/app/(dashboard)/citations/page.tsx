@@ -1,340 +1,214 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import Topbar from "@/components/shared/Topbar";
-import { Link2, ExternalLink, TrendingUp, TrendingDown, Shield, AlertCircle, Minus, ArrowUpRight } from "lucide-react";
+import { useAuthStore } from "@/lib/stores/authStore";
+import { visibilityApi, type CitationsData } from "@/lib/api/visibility";
+import { engineColors } from "@/lib/colors";
+import { Link2, ExternalLink, Shield, Target, Globe, AlertCircle, RefreshCw, ArrowRight, Zap } from "lucide-react";
 
-// ── Data ───────────────────────────────────────────────────────────────────
+const LIME = "#C9F31D";
+const card: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12 };
+const MODEL_LABEL: Record<string, string> = { chatgpt: "ChatGPT", gemini: "Gemini", claude: "Claude", perplexity: "Perplexity", google_ai_overview: "Google AI" };
 
-const CITATIONS = [
-  { domain: "techcrunch.com",  count: 18, isBrand: false, authority: 92, trend: +3, type: "News"      },
-  { domain: "acmecorp.com",    count: 14, isBrand: true,  authority: 78, trend: +5, type: "Brand"     },
-  { domain: "g2.com",          count: 11, isBrand: false, authority: 85, trend: +1, type: "Review"    },
-  { domain: "forbes.com",      count: 9,  isBrand: false, authority: 95, trend: 0,  type: "News"      },
-  { domain: "capterra.com",    count: 7,  isBrand: false, authority: 82, trend: +2, type: "Review"    },
-  { domain: "producthunt.com", count: 6,  isBrand: false, authority: 76, trend: -1, type: "Community" },
-  { domain: "reddit.com",      count: 5,  isBrand: false, authority: 88, trend: +4, type: "Community" },
-  { domain: "wikipedia.org",   count: 3,  isBrand: false, authority: 99, trend: 0,  type: "Reference" },
-];
-
-const MISSING = [
-  { domain: "gartner.com",     reason: "High authority — no brand mention found",  authority: 97 },
-  { domain: "trustradius.com", reason: "Competitor cited 8× — you have 0",         authority: 74 },
-  { domain: "getapp.com",      reason: "Category leader source — missing",          authority: 71 },
-];
-
-const TYPE_COLORS: Record<string, { color: string; bg: string }> = {
-  News:      { color: "#22B8CF", bg: "rgba(34,184,207,0.12)"  },
-  Brand:     { color: "#C9F31D", bg: "rgba(201,243,29,0.12)"  },
-  Review:    { color: "#22C55E", bg: "rgba(34,197,94,0.12)"   },
-  Community: { color: "#A78BFA", bg: "rgba(167,139,250,0.12)" },
-  Reference: { color: "#F59E0B", bg: "rgba(245,158,11,0.12)"  },
-};
-
-const MAX_COUNT = Math.max(...CITATIONS.map((c) => c.count));
-
-function authorityColor(a: number) {
-  if (a >= 90) return "#22C55E";
-  if (a >= 75) return "#C9F31D";
-  return "#F59E0B";
+// Real domain authority (0-100) from DataForSEO Labs organic-traffic estimate.
+function authorityBand(a: number) {
+  if (a >= 70) return { label: "High", color: "#22C55E" };
+  if (a >= 45) return { label: "Good", color: "#C9F31D" };
+  if (a >= 20) return { label: "Medium", color: "#F59E0B" };
+  return { label: "Low", color: "#EF4444" };
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────
-
-const card: React.CSSProperties = {
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: 12,
-};
-
-const th: React.CSSProperties = {
-  padding: "9px 16px",
-  textAlign: "left",
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: "0.06em",
-  color: "rgba(255,255,255,0.28)",
-  textTransform: "uppercase",
-  whiteSpace: "nowrap",
-};
-
-// ── Component ──────────────────────────────────────────────────────────────
-
 export default function CitationsPage() {
-  const totalCitations = CITATIONS.reduce((s, c) => s + c.count, 0);
-  const brandHits = CITATIONS.find((c) => c.isBrand)?.count ?? 0;
+  const project   = useAuthStore((s) => s.project);
+  const projectId = useAuthStore((s) => s.projectId);
 
+  const [days, setDays]       = useState(30);
+  const [data, setData]       = useState<CitationsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!projectId) { setLoading(false); return; }
+    setLoading(true); setError(null);
+    try {
+      setData(await visibilityApi.getCitations(projectId, days));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load citations");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, days]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Brand metrics are the real signal (hero); Total/Unique are context for them.
   const stats = [
-    { label: "Total Citations",   value: String(totalCitations), color: "#C9F31D", icon: Link2        },
-    { label: "Unique Domains",    value: String(CITATIONS.length), color: "#22B8CF", icon: Shield     },
-    { label: "Brand Domain Hits", value: String(brandHits),      color: "#22C55E", icon: TrendingUp   },
-    { label: "Missing Opportunities", value: String(MISSING.length), color: "#EF4444", icon: AlertCircle },
+    { label: "Brand Citations", value: data?.brandCitations ?? 0, icon: Shield, color: "#22C55E", primary: true,
+      hint: "Times AI cited your site",
+      tip: "How many times AI engines linked your own domain as a source. This is the metric that reflects YOUR visibility." },
+    { label: "Brand Share", value: `${data?.brandShare ?? 0}%`, icon: Target, color: "#C084FC", primary: true,
+      hint: "Your share of all citations",
+      tip: "Your domain's citations as a % of every citation AI gave for your topics (Brand ÷ Total)." },
+    { label: "Total Citations", value: data?.totalCitations ?? 0, icon: Link2, color: LIME, primary: false,
+      hint: "All sources AI cited · context",
+      tip: "Every source link AI gave across all your tracked answers in this period (repeats included). It's the denominator for Brand Share — context, not a brand score." },
+    { label: "Unique Domains", value: data?.uniqueDomains ?? 0, icon: Globe, color: "#22B8CF", primary: false,
+      hint: "Distinct domains cited",
+      tip: "Number of different websites AI cited across your tracked answers." },
   ];
+
+  const sources = data?.sources ?? [];
+  const opportunities = data?.opportunities ?? [];
+  const empty = !!projectId && !loading && !error && sources.length === 0;
 
   return (
     <div style={{ background: "#0E0F11", minHeight: "100vh" }}>
-      <Topbar title="Citation Tracking" subtitle="Sources AI models use to cite your brand" />
+      <Topbar title="Citations" subtitle={project ? `${project.name} · ${project.domain}` : "Sources AI engines cite for your topics"} days={days} onDaysChange={setDays} />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
 
-        {/* ── Stats Row ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          {stats.map(({ label, value, color, icon: Icon }) => (
-            <div key={label} style={{ ...card, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
-              <div style={{
-                width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-                background: `${color}15`, border: `1px solid ${color}25`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <Icon size={16} style={{ color }} />
-              </div>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-0.5px", fontVariantNumeric: "tabular-nums" }}>
-                  {value}
-                </div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 3 }}>{label}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* ── Citation Sources Table ── */}
-        <div style={{ ...card, overflow: "hidden" }}>
-          <div style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid rgba(255,255,255,0.07)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Citation Sources</h3>
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Sorted by frequency</span>
+        {!projectId && (
+          <div style={{ ...card, padding: 40, textAlign: "center" }}>
+            <p style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", margin: 0 }}>Select or add a brand from the sidebar to view citations.</p>
           </div>
+        )}
 
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                  {["Domain", "Type", "Citations", "Authority", "Trend"].map((h) => (
-                    <th key={h} style={th as React.ThHTMLAttributes<HTMLTableCellElement>["style"]}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {CITATIONS.map((c, i) => {
-                  const typeStyle = TYPE_COLORS[c.type] ?? { color: "#fff", bg: "rgba(255,255,255,0.08)" };
-                  const aColor = authorityColor(c.authority);
-                  const isUp = c.trend > 0;
-                  const isDown = c.trend < 0;
-
-                  return (
-                    <tr
-                      key={c.domain}
-                      style={{
-                        borderBottom: i < CITATIONS.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
-                        background: c.isBrand ? "rgba(201,243,29,0.025)" : "transparent",
-                        transition: "background 0.15s",
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!c.isBrand) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.025)";
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = c.isBrand ? "rgba(201,243,29,0.025)" : "transparent";
-                      }}
-                    >
-                      {/* Domain */}
-                      <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          {/* Favicon placeholder */}
-                          <div style={{
-                            width: 30, height: 30, borderRadius: 8, flexShrink: 0,
-                            background: c.isBrand ? "rgba(201,243,29,0.12)" : "rgba(255,255,255,0.06)",
-                            border: c.isBrand ? "1px solid rgba(201,243,29,0.25)" : "1px solid rgba(255,255,255,0.08)",
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            fontSize: 10, fontWeight: 800,
-                            color: c.isBrand ? "#C9F31D" : "rgba(255,255,255,0.45)",
-                          }}>
-                            {c.domain.slice(0, 2).toUpperCase()}
-                          </div>
-                          <div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: c.isBrand ? "#C9F31D" : "#fff" }}>
-                                {c.domain}
-                              </span>
-                              {c.isBrand && (
-                                <span style={{
-                                  fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 20,
-                                  background: "rgba(201,243,29,0.15)", color: "#C9F31D", letterSpacing: "0.06em",
-                                }}>
-                                  YOUR DOMAIN
-                                </span>
-                              )}
-                              <ExternalLink size={10} style={{ color: "rgba(255,255,255,0.25)" }} />
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Type */}
-                      <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 20,
-                          background: typeStyle.bg, color: typeStyle.color, letterSpacing: "0.04em",
-                        }}>
-                          {c.type}
-                        </span>
-                      </td>
-
-                      {/* Citations bar + count */}
-                      <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div style={{
-                            width: 100, height: 5, borderRadius: 3,
-                            background: "rgba(255,255,255,0.08)", overflow: "hidden", flexShrink: 0,
-                          }}>
-                            <div style={{
-                              height: "100%", borderRadius: 3,
-                              width: `${(c.count / MAX_COUNT) * 100}%`,
-                              background: c.isBrand
-                                ? "linear-gradient(90deg,#C9F31D,#A8D017)"
-                                : "linear-gradient(90deg,#22B8CF99,#22B8CF)",
-                            }} />
-                          </div>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontVariantNumeric: "tabular-nums", minWidth: 20 }}>
-                            {c.count}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Authority */}
-                      <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{
-                            width: 44, height: 4, borderRadius: 2,
-                            background: "rgba(255,255,255,0.08)", overflow: "hidden", flexShrink: 0,
-                          }}>
-                            <div style={{
-                              height: "100%", borderRadius: 2,
-                              width: `${c.authority}%`, background: aColor,
-                            }} />
-                          </div>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: aColor, fontVariantNumeric: "tabular-nums" }}>
-                            {c.authority}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Trend */}
-                      <td style={{ padding: "13px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{
-                          display: "inline-flex", alignItems: "center", gap: 4,
-                          padding: "3px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-                          background: isUp ? "rgba(34,197,94,0.12)" : isDown ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.06)",
-                          color: isUp ? "#22C55E" : isDown ? "#EF4444" : "rgba(255,255,255,0.28)",
-                        }}>
-                          {isUp ? <TrendingUp size={10} /> : isDown ? <TrendingDown size={10} /> : <Minus size={10} />}
-                          {isUp ? `+${c.trend}` : c.trend === 0 ? "—" : c.trend}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* ── Missing Citation Opportunities ── */}
-        <div style={{ ...card, overflow: "hidden" }}>
-          <div style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid rgba(255,255,255,0.07)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{
-                width: 24, height: 24, borderRadius: 6,
-                background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.20)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <AlertCircle size={12} style={{ color: "#EF4444" }} />
+        {projectId && (
+          <>
+            {error && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderRadius: 10, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "rgba(255,255,255,0.65)" }}><AlertCircle size={14} style={{ color: "#EF4444" }} /> {error}</span>
+                <button onClick={load} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 7, border: "none", cursor: "pointer", background: "rgba(239,68,68,0.12)", color: "#EF4444", fontSize: 11, fontWeight: 600 }}><RefreshCw size={11} /> Retry</button>
               </div>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Missing Citation Opportunities</h3>
-            </div>
-            <span style={{
-              fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 20,
-              background: "rgba(239,68,68,0.12)", color: "#EF4444",
-            }}>
-              {MISSING.length} gaps found
-            </span>
-          </div>
+            )}
 
-          <div>
-            {MISSING.map((m, i) => {
-              const aColor = authorityColor(m.authority);
-              return (
+            {/* Stats — Brand metrics (hero) first, then context */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+              {stats.map(({ label, value, icon: Icon, color, hint, tip, primary }) => (
                 <div
-                  key={m.domain}
+                  key={label}
+                  title={tip}
                   style={{
-                    display: "flex", alignItems: "center", gap: 16,
-                    padding: "16px 20px",
-                    borderBottom: i < MISSING.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none",
-                    transition: "background 0.15s",
+                    ...card,
+                    padding: "16px 18px", display: "flex", alignItems: "flex-start", gap: 13, cursor: "help",
+                    background: primary ? `${color}0D` : "rgba(255,255,255,0.03)",
+                    border: primary ? `1px solid ${color}33` : "1px solid rgba(255,255,255,0.08)",
                   }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.02)"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
-                  {/* Alert icon */}
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 9, flexShrink: 0,
-                    background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.18)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}>
-                    <AlertCircle size={15} style={{ color: "#EF4444" }} />
+                  <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, background: `${color}15`, border: `1px solid ${color}25`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Icon size={16} style={{ color }} />
                   </div>
-
-                  {/* Domain + reason */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>{m.domain}</span>
-                      <ExternalLink size={10} style={{ color: "rgba(255,255,255,0.25)" }} />
-                    </div>
-                    <p style={{ fontSize: 11, color: "rgba(255,255,255,0.42)", margin: 0 }}>{m.reason}</p>
-                  </div>
-
-                  {/* Authority */}
-                  <div style={{ textAlign: "center", flexShrink: 0 }}>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <div style={{
-                        width: 44, height: 4, borderRadius: 2,
-                        background: "rgba(255,255,255,0.08)", overflow: "hidden",
-                      }}>
-                        <div style={{ height: "100%", borderRadius: 2, width: `${m.authority}%`, background: aColor }} />
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: aColor, fontVariantNumeric: "tabular-nums" }}>
-                        {m.authority}
-                      </span>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-0.5px" }}>{loading ? "—" : value}</span>
+                      {primary && <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.06em", padding: "2px 5px", borderRadius: 4, background: `${color}22`, color, textTransform: "uppercase" }}>Key</span>}
                     </div>
-                    <div style={{ fontSize: 9, color: "rgba(255,255,255,0.28)", marginTop: 3, textAlign: "right" }}>authority</div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: "rgba(255,255,255,0.7)", marginTop: 5 }}>{label}</div>
+                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hint}</div>
                   </div>
-
-                  {/* CTA */}
-                  <button style={{
-                    display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
-                    padding: "7px 14px", borderRadius: 8, cursor: "pointer",
-                    background: "rgba(201,243,29,0.08)", border: "1px solid rgba(201,243,29,0.22)",
-                    color: "#C9F31D", fontSize: 12, fontWeight: 700,
-                    transition: "background 0.15s",
-                  }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(201,243,29,0.15)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(201,243,29,0.08)"; }}
-                  >
-                    Get Listed
-                    <ArrowUpRight size={12} />
-                  </button>
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              ))}
+            </div>
 
+            {empty ? (
+              <div style={{ ...card, padding: 48, textAlign: "center" }}>
+                <Zap size={28} style={{ color: LIME, opacity: 0.8 }} />
+                <p style={{ fontSize: 14, color: "rgba(255,255,255,0.7)", margin: "14px 0 6px", fontWeight: 600 }}>No citations captured yet</p>
+                <p style={{ fontSize: 12.5, color: "rgba(255,255,255,0.45)", margin: "0 0 16px" }}>Run a prompt campaign — citations come from engines like Perplexity & Google AI that cite sources.</p>
+                <Link href="/prompts" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, background: LIME, color: "#000", fontSize: 12.5, fontWeight: 600, textDecoration: "none" }}>
+                  Go to Campaigns <ArrowRight size={13} />
+                </Link>
+              </div>
+            ) : (
+              <>
+                {/* Sources table */}
+                <div style={{ ...card, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+                    <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Citation Sources</h3>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                          {["Domain", "Type", "Authority", "Citations", "Cited by"].map((h) => (
+                            <th key={h} style={{ padding: "9px 20px", textAlign: "left", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", color: "rgba(255,255,255,0.28)", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sources.map((s, i) => {
+                          const ab = authorityBand(s.authority);
+                          return (
+                            <tr key={s.domain} style={{ borderBottom: i < sources.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none", background: s.isBrand ? "rgba(201,243,29,0.03)" : "transparent" }}>
+                              <td style={{ padding: "13px 20px", whiteSpace: "nowrap" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: s.isBrand ? LIME : "#fff" }}>{s.domain}</span>
+                                  <ExternalLink size={11} style={{ color: "rgba(255,255,255,0.3)" }} />
+                                </div>
+                              </td>
+                              <td style={{ padding: "13px 20px" }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: s.isBrand ? "rgba(201,243,29,0.12)" : "rgba(255,255,255,0.06)", color: s.isBrand ? LIME : "rgba(255,255,255,0.5)" }}>
+                                  {s.isBrand ? "Your domain" : "External"}
+                                </span>
+                              </td>
+                              <td style={{ padding: "13px 20px", whiteSpace: "nowrap" }}>
+                                {s.authority > 0 ? (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <div style={{ width: 44, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                                      <div style={{ height: "100%", borderRadius: 3, width: `${s.authority}%`, background: ab.color }} />
+                                    </div>
+                                    <span style={{ fontSize: 12, fontWeight: 600, color: ab.color }}>{s.authority}</span>
+                                  </div>
+                                ) : (
+                                  <span style={{ fontSize: 12, color: "rgba(255,255,255,0.25)" }}>—</span>
+                                )}
+                              </td>
+                              <td style={{ padding: "13px 20px", fontSize: 13, fontWeight: 700, color: "#fff" }}>{s.count}</td>
+                              <td style={{ padding: "13px 20px" }}>
+                                <div style={{ display: "flex", gap: 4 }}>
+                                  {s.models.map((m) => (
+                                    <span key={m} title={MODEL_LABEL[m] ?? m} style={{ width: 18, height: 18, borderRadius: 5, fontSize: 8, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", background: `${engineColors[m] ?? "#888"}22`, color: engineColors[m] ?? "#aaa" }}>
+                                      {m.slice(0, 2).toUpperCase()}
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Opportunities */}
+                {opportunities.length > 0 && (
+                  <div style={{ ...card, padding: 20 }}>
+                    <h3 style={{ fontSize: 13, fontWeight: 600, color: "#fff", margin: "0 0 4px" }}>Citation Opportunities</h3>
+                    <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "0 0 14px" }}>
+                      High-frequency sources AI cites for your topics — get featured on these to boost authority.
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+                      {opportunities.map((o) => (
+                        <div key={o.domain} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                          <div style={{ width: 34, height: 34, borderRadius: 9, background: "rgba(245,158,11,0.12)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <Target size={15} style={{ color: "#F59E0B" }} />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: 13, fontWeight: 600, color: "#fff", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.domain}</p>
+                            <p style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>cited {o.count}×{o.authority > 0 ? ` · authority ${o.authority}` : ""}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

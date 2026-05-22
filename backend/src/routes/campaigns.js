@@ -1,10 +1,64 @@
 import { Router } from "express";
-import { Campaign, PromptRun } from "../models/index.js";
+import { Campaign, PromptRun, Project } from "../models/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { publishJob } from "../lib/qstash.js";
+import { generateCategoryPrompts } from "../lib/aiClients.js";
 
 const router = Router();
 router.use(requireAuth);
+
+// POST /api/campaigns/audit — one-click AI-visibility audit for a brand.
+// Auto-generates category questions, creates a campaign, and runs it now.
+router.post("/audit", async (req, res) => {
+  try {
+    const { projectId, category } = req.body;
+    const project = await Project.findById(projectId);
+    if (!project) return res.status(404).json({ success: false, message: "Project not found" });
+
+    const prompts = await generateCategoryPrompts({
+      brandName: project.brandName,
+      domain: project.domain,
+      category: category ?? project.industry,
+    });
+
+    // Persist category on the project for future audits.
+    if (category && category !== project.industry) {
+      project.industry = category;
+      await project.save();
+    }
+
+    const campaign = await Campaign.create({
+      projectId: project._id,
+      name: "AI Visibility Audit",
+      description: "Auto-generated audit across AI engines",
+      frequency: "weekly",
+      isActive: true,
+      nextRunAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      prompts: prompts.map((text) => ({ text, category: "generic", intent: "commercial", isActive: true })),
+    });
+
+    await Promise.all(
+      campaign.prompts.map((p) =>
+        PromptRun.create({ campaignId: campaign._id, projectId: project._id, promptText: p.text, status: "pending" })
+      )
+    );
+
+    await publishJob(
+      "/api/webhooks/run-campaign",
+      { campaignId: campaign._id.toString() },
+      {
+        runLocal: async () => {
+          const { runCampaign } = await import("../workers/campaignRunner.js");
+          await runCampaign(campaign._id.toString());
+        },
+      }
+    );
+
+    res.status(202).json({ success: true, data: { campaignId: campaign._id, prompts, promptCount: prompts.length } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // GET /api/campaigns?projectId=xxx
 router.get("/", async (req, res) => {
