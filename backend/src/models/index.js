@@ -129,6 +129,58 @@ const auditLogSchema = new Schema({
   ipAddress:{ type: String },
 }, { timestamps: true });
 
+// ── Rate-limit bucket ─────────────────────────────────────────────────────
+// Shared sliding-window counter. Lives in Mongo rather than process memory so
+// every serverless instance shares one window; a per-process Map would give
+// each warm container its own allowance and make the effective cap
+// `limit × N(containers)`. Write-heavy and disposable — losing it costs
+// nothing but a reset of in-flight windows.
+const rateLimitBucketSchema = new Schema(
+  {
+    // "<limiterName>:<keyFn output>", e.g. "auth_login_ip:ip:1.2.3.4".
+    key:     { type: String, required: true, unique: true },
+    count:   { type: Number, required: true, default: 0 },
+    resetAt: { type: Date,   required: true },
+  },
+  { versionKey: false }
+);
+// TTL — Mongo sweeps each bucket once its window elapses. The sweep runs about
+// once a minute, so a stale row can briefly outlive resetAt; every read below
+// filters on resetAt explicitly rather than trusting the TTL to have fired.
+rateLimitBucketSchema.index({ resetAt: 1 }, { expireAfterSeconds: 0 });
+
+// Atomically count one request against `key`. Three single-document atomic
+// operations so concurrent callers across instances cannot lose an increment:
+// increment an active window, else claim an expired one, else insert — and if
+// another instance inserted first, increment theirs.
+rateLimitBucketSchema.statics.consume = async function (key, windowMs) {
+  const now     = new Date();
+  const resetAt = new Date(now.getTime() + windowMs);
+
+  const active = await this.findOneAndUpdate(
+    { key, resetAt: { $gt: now } },
+    { $inc: { count: 1 } },
+    { new: true }
+  ).lean();
+  if (active) return active;
+
+  const reclaimed = await this.findOneAndUpdate(
+    { key, resetAt: { $lte: now } },
+    { $set: { count: 1, resetAt } },
+    { new: true }
+  ).lean();
+  if (reclaimed) return reclaimed;
+
+  try {
+    return await this.create({ key, count: 1, resetAt });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return this.findOneAndUpdate({ key }, { $inc: { count: 1 } }, { new: true }).lean();
+    }
+    throw err;
+  }
+};
+
 export const User             = models.User             || model("User",            userSchema);
 export const Team             = models.Team             || model("Team",            teamSchema);
 export const MagicLinkToken   = models.MagicLinkToken   || model("MagicLinkToken",  magicLinkTokenSchema);
@@ -138,3 +190,4 @@ export const PromptRun        = models.PromptRun        || model("PromptRun",   
 export const VisibilityScore  = models.VisibilityScore  || model("VisibilityScore", visibilityScoreSchema);
 export const Subscription     = models.Subscription     || model("Subscription",    subscriptionSchema);
 export const AuditLog         = models.AuditLog         || model("AuditLog",        auditLogSchema);
+export const RateLimitBucket  = models.RateLimitBucket  || model("RateLimitBucket", rateLimitBucketSchema);
