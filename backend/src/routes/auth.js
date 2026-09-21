@@ -4,8 +4,56 @@ import crypto from "crypto";
 import { User, Team, MagicLinkToken } from "../models/index.js";
 import { signToken, requireAuth } from "../middleware/auth.js";
 import { sendMagicLinkEmail } from "../lib/email.js";
+import { createRateLimiter, keyByEmail, keyByIp } from "../lib/rateLimit.js";
+import { isDisposableEmail, disposableEmailResponse } from "../lib/disposableEmail.js";
 
 const router = Router();
+
+// ── Abuse controls ────────────────────────────────────────────────────────
+// /login had no cap at all, which makes password guessing free. /register and
+// the magic-link sender had none either, so one script could mint accounts or
+// spam a victim's inbox without limit.
+//
+// Note the two layers do different jobs and neither replaces the other: the
+// per-email caps slow down reuse of one address, while the disposable-domain
+// check below stops someone cycling through an endless supply of fresh ones.
+
+const loginLimiterByEmail = createRateLimiter({
+  name: "auth_login_email",
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  keyFn: keyByEmail,
+  message: "Too many sign-in attempts for this account. Try again in {retry}s.",
+});
+const loginLimiterByIp = createRateLimiter({
+  name: "auth_login_ip",
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  keyFn: keyByIp,
+  message: "Too many sign-in attempts from this device. Try again in {retry}s.",
+});
+const registerLimiterByIp = createRateLimiter({
+  name: "auth_register_ip",
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  keyFn: keyByIp,
+  message: "Too many accounts created from this device. Try again in {retry}s.",
+});
+const magicLinkLimiterByEmail = createRateLimiter({
+  name: "auth_magiclink_email",
+  windowMs: 15 * 60 * 1000,
+  limit: 3,
+  keyFn: keyByEmail,
+  message:
+    "A sign-in link was just sent to this email. Check your inbox and spam folder, then wait {retry}s before requesting another.",
+});
+const magicLinkLimiterByIp = createRateLimiter({
+  name: "auth_magiclink_ip",
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  keyFn: keyByIp,
+  message: "Too many sign-in requests from this device. Try again in {retry}s.",
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function parseExpiry(s) {
@@ -30,11 +78,14 @@ async function ensureTeamForUser(user) {
 // ── Password-based auth ───────────────────────────────────────────────────
 
 // POST /api/auth/register
-router.post("/register", async (req, res) => {
+router.post("/register", registerLimiterByIp, async (req, res) => {
   try {
     const { email, password, fullName } = req.body;
     if (!email || !password || !fullName)
       return res.status(400).json({ success: false, message: "All fields required" });
+
+    if (isDisposableEmail(email))
+      return res.status(403).json(disposableEmailResponse(email));
 
     const exists = await User.findOne({ email });
     if (exists)
@@ -54,7 +105,7 @@ router.post("/register", async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post("/login", async (req, res) => {
+router.post("/login", loginLimiterByEmail, loginLimiterByIp, async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
@@ -82,10 +133,26 @@ router.post("/login", async (req, res) => {
 // ── Magic-link auth ───────────────────────────────────────────────────────
 
 // POST /api/auth/magic-link/send  { email, fullName? }
-router.post("/magic-link/send", async (req, res) => {
+router.post("/magic-link/send", magicLinkLimiterByEmail, magicLinkLimiterByIp, async (req, res) => {
   try {
     const { email, fullName } = req.body;
     if (!email) return res.status(400).json({ success: false, message: "Email required" });
+
+    // Refused only when the address has never registered. Someone who signed
+    // up with a throwaway address before this check existed should still be
+    // able to get back into their account; locking them out is worse than
+    // having accepted the address in the first place.
+    if (isDisposableEmail(email)) {
+      let known = false;
+      try {
+        known = Boolean(await User.exists({ email: String(email).toLowerCase() }));
+      } catch (err) {
+        // Fail open: a database blip must not become a sign-in outage.
+        console.error("[auth] user lookup failed for disposable check (allowing):", err?.message);
+        known = true;
+      }
+      if (!known) return res.status(403).json(disposableEmailResponse(email));
+    }
 
     // Always respond success to avoid user enumeration
     const raw = crypto.randomBytes(32).toString("hex");
