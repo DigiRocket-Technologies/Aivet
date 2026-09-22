@@ -71,8 +71,24 @@ export async function runCampaign(campaignId) {
           citations: markBrandCitations(r.value.citations ?? [], brandDomain),
         }));
 
-      run.responses   = responses;
-      run.status      = "completed";
+      // An engine that throws used to vanish here: the run was marked
+      // "completed" with fewer responses and no hint that anything failed,
+      // which is indistinguishable from the engine having nothing to say.
+      const failures = results
+        .filter((r) => r.status === "rejected")
+        .map((r) => r.reason?.message ?? String(r.reason));
+      for (const f of failures) console.warn(`[campaign ${campaignId}] engine failed: ${f}`);
+
+      run.responses = responses;
+      if (responses.length === 0) {
+        run.status       = "failed";
+        run.errorMessage = failures.join(" | ") || "No engine returned a response";
+      } else {
+        run.status       = "completed";
+        run.errorMessage = failures.length
+          ? `${failures.length} of ${callers.length} engines failed: ${failures.join(" | ")}`
+          : undefined;
+      }
       run.completedAt = new Date();
       await run.save();
     } catch (err) {

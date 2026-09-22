@@ -1,7 +1,9 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { projectsApi, type Project } from "@/lib/api/auth";
+import { useAuthStore } from "@/lib/stores/authStore";
 import {
   Eye, EyeOff, Copy, RefreshCw, Plus, Trash2,
   FolderOpen, Users, Key, Bell, CheckCircle2, Shield, Globe, Building2,
@@ -16,11 +18,12 @@ const TABS = [
   { id: "Notifications", icon: Bell       },
 ];
 
-const TEAM = [
-  { name: "John Doe",  email: "john@acme.com",  role: "Owner",  avatar: "JD", joined: "Jan 2025" },
-  { name: "Sarah Kim", email: "sarah@acme.com", role: "Admin",  avatar: "SK", joined: "Mar 2025" },
-  { name: "Mike Chen", email: "mike@acme.com",  role: "Member", avatar: "MC", joined: "May 2025" },
-];
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 const ROLE_STYLE: Record<string, { color: string; bg: string }> = {
   Owner:  { color: "#C9F31D", bg: "rgba(201,243,29,0.12)"  },
@@ -82,7 +85,95 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void 
 
 // ── Component ──────────────────────────────────────────────────────────────
 
+interface ProjectForm {
+  name:         string;
+  domain:       string;
+  brandName:    string;
+  industry:     string;
+  targetRegion: string;
+}
+
+const EMPTY_PROJECT: ProjectForm = { name: "", domain: "", brandName: "", industry: "", targetRegion: "" };
+
+function projectToForm(p: Project | null): ProjectForm {
+  if (!p) return EMPTY_PROJECT;
+  return {
+    name:         p.name         ?? "",
+    domain:       p.domain       ?? "",
+    brandName:    p.brandName    ?? "",
+    industry:     p.industry     ?? "",
+    targetRegion: p.targetRegion ?? "",
+  };
+}
+
 export default function SettingsPage() {
+  const user        = useAuthStore((s) => s.user);
+  const projects    = useAuthStore((s) => s.projects);
+  const projectId   = useAuthStore((s) => s.projectId);
+  const setProjects = useAuthStore((s) => s.setProjects);
+
+  const activeProject = projects.find((p) => p._id === projectId) ?? null;
+
+  // The API exposes no team-members endpoint yet, so the only member that can
+  // be shown truthfully is whoever is signed in.
+  const TEAM = user
+    ? [{
+        name:   user.fullName,
+        email:  user.email,
+        role:   "Owner",
+        avatar: initialsOf(user.fullName),
+        joined: "—",
+      }]
+    : [];
+
+  const [saving,     setSaving]     = useState(false);
+  const [saveMsg,    setSaveMsg]    = useState<string | null>(null);
+  const [saveError,  setSaveError]  = useState<string | null>(null);
+
+  // The form is a draft tagged with the project it belongs to, so switching
+  // project re-derives the fields without an effect that mirrors state.
+  const [draft, setDraft] = useState<{ id: string | null; values: ProjectForm } | null>(null);
+  const currentId = activeProject?._id ?? null;
+  const form = draft && draft.id === currentId ? draft.values : projectToForm(activeProject);
+
+  function setForm(update: ProjectForm | ((prev: ProjectForm) => ProjectForm)) {
+    setDraft({
+      id: currentId,
+      values: typeof update === "function" ? update(form) : update,
+    });
+  }
+
+  // Refresh from the API on mount so a reload shows server truth, not just
+  // whatever the persisted store happened to hold.
+  useEffect(() => {
+    projectsApi.list().then(setProjects).catch(() => {});
+  }, [setProjects]);
+
+  async function handleSaveProject() {
+    if (saving) return;
+    setSaving(true);
+    setSaveMsg(null);
+    setSaveError(null);
+    try {
+      if (!form.name.trim() || !form.domain.trim() || !form.brandName.trim()) {
+        throw new Error("Project name, domain and brand name are required.");
+      }
+      if (activeProject) {
+        await projectsApi.update(activeProject._id, form);
+        setSaveMsg("Project saved.");
+      } else {
+        await projectsApi.create(form);
+        setSaveMsg("Project created.");
+      }
+      setProjects(await projectsApi.list());
+      setDraft(null);   // fall back to server values for the refreshed project
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Save failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const [activeTab, setActiveTab]   = useState("Project");
   const [showKey, setShowKey]       = useState(false);
   const [copied, setCopied]         = useState(false);
@@ -140,27 +231,51 @@ export default function SettingsPage() {
                 <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Project Details</h3>
               </div>
 
+              {!activeProject && (
+                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "0 0 14px 0" }}>
+                  No project yet — fill this in to create your first one.
+                </p>
+              )}
+
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {[
-                  { label: "Project Name",  value: "Acme Corp",    icon: Building2 },
-                  { label: "Domain",        value: "acmecorp.com", icon: Globe     },
-                  { label: "Brand Name",    value: "Acme Corp",    icon: Shield    },
-                  { label: "Industry",      value: "SaaS / B2B",   icon: FolderOpen },
-                  { label: "Target Region", value: "Global",       icon: Globe     },
-                ].map(({ label, value }) => (
-                  <div key={label}>
-                    <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.42)", marginBottom: 6, letterSpacing: "0.04em" }}>
+                {([
+                  { label: "Project Name",  key: "name"         as const, placeholder: "Acme Corp"    },
+                  { label: "Domain",        key: "domain"       as const, placeholder: "acmecorp.com" },
+                  { label: "Brand Name",    key: "brandName"    as const, placeholder: "Acme Corp"    },
+                  { label: "Industry",      key: "industry"     as const, placeholder: "SaaS / B2B"   },
+                  { label: "Target Region", key: "targetRegion" as const, placeholder: "Global"       },
+                ]).map(({ label, key, placeholder }) => (
+                  <div key={key}>
+                    <label htmlFor={key} style={{ display: "block", fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.42)", marginBottom: 6, letterSpacing: "0.04em" }}>
                       {label.toUpperCase()}
                     </label>
-                    <input defaultValue={value} style={inputStyle} />
+                    <input
+                      id={key}
+                      value={form[key]}
+                      placeholder={placeholder}
+                      onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                      style={inputStyle}
+                    />
                   </div>
                 ))}
 
-                <button style={{
-                  marginTop: 4, padding: "9px 20px", borderRadius: 8, border: "none", cursor: "pointer",
-                  background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700, alignSelf: "flex-start",
-                }}>
-                  Save Changes
+                {saveError && (
+                  <p style={{ fontSize: 12, color: "#FCA5A5", margin: 0 }}>{saveError}</p>
+                )}
+                {saveMsg && (
+                  <p style={{ fontSize: 12, color: "#C9F31D", margin: 0 }}>{saveMsg}</p>
+                )}
+
+                <button
+                  onClick={handleSaveProject}
+                  disabled={saving}
+                  style={{
+                    marginTop: 4, padding: "9px 20px", borderRadius: 8, border: "none",
+                    cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1,
+                    background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700, alignSelf: "flex-start",
+                  }}
+                >
+                  {saving ? "Saving…" : activeProject ? "Save Changes" : "Create Project"}
                 </button>
               </div>
             </div>
@@ -170,14 +285,16 @@ export default function SettingsPage() {
               <div style={{ ...card, padding: "22px 22px" }}>
                 <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: "0 0 6px 0" }}>Project Info</h3>
                 <p style={{ fontSize: 12, color: "rgba(255,255,255,0.40)", margin: "0 0 16px 0" }}>
-                  Created January 12, 2025 · Plan: Pro
+                  {activeProject?.createdAt
+                    ? `Created ${new Date(activeProject.createdAt).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
+                    : "Not created yet"}
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {[
-                    { label: "Prompts tracked", value: "742" },
-                    { label: "Campaigns active", value: "3"  },
-                    { label: "Competitors",       value: "4"  },
-                    { label: "Team members",      value: "3"  },
+                    { label: "Projects",    value: String(projects.length) },
+                    { label: "Domain",      value: activeProject?.domain ?? "—" },
+                    { label: "Industry",    value: activeProject?.industry ?? "—" },
+                    { label: "Signed in as", value: user?.email ?? "—" },
                   ].map(({ label, value }) => (
                     <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <span style={{ fontSize: 12, color: "rgba(255,255,255,0.42)" }}>{label}</span>
@@ -318,7 +435,7 @@ export default function SettingsPage() {
                           <td style={{ padding: "14px 16px", whiteSpace: "nowrap" }}>
                             {m.role !== "Owner" ? (
                               <button style={{
-                                width: 28, height: 28, borderRadius: 7, border: "none", cursor: "pointer",
+                                width: 28, height: 28, borderRadius: 7, cursor: "pointer",
                                 background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)",
                                 display: "flex", alignItems: "center", justifyContent: "center",
                                 transition: "background 0.15s",

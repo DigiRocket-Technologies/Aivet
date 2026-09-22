@@ -11,3 +11,10 @@ coverage/
 venv/
 *.pyc
 __pycache__/
+
+# Secret files. `.env` alone did not cover `backend/env`, which holds live
+# credentials — keep every spelling out of git.
+env
+env.*
+*.env
+!.env.example

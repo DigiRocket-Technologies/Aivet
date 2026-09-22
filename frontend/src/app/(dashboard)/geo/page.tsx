@@ -1,6 +1,7 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
+import DemoNotice from "@/components/shared/DemoNotice";
 import {
   Sparkles, ChevronRight, TrendingUp, FileText, Code2,
   HelpCircle, Layers, Cpu, Zap, Target, Clock,
@@ -123,6 +124,8 @@ export default function GEOPage() {
       <Topbar title="GEO Recommendations" subtitle="AI-generated optimization opportunities" />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <DemoNotice what="These recommendations are examples, not an analysis of your site." />
 
         {/* ── Stats Row ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>

@@ -1,37 +1,30 @@
 import { api } from "./client";
 
-export interface DashboardData {
-  current_score:  number;
-  score_band:     string;
-  score_change:   number;
-  total_prompts:  number;
-  total_mentions: number;
-  trend: {
-    score_date:       string;
-    overall_score:    number;
-    mention_score:    number | null;
-    ranking_score:    number | null;
-    sentiment_score:  number | null;
-    citation_score:   number | null;
-    diversity_score:  number | null;
-    total_prompts:    number | null;
-    total_mentions:   number | null;
-    models_breakdown: Record<string, number> | null;
-  }[];
+// Field names mirror the API exactly — it answers in camelCase
+// (see backend/src/routes/visibility.js).
+export interface TrendEntry {
+  scoreDate:        string;
+  overallScore:     number;
+  mentionScore:     number | null;
+  rankingScore:     number | null;
+  sentimentScore:   number | null;
+  citationScore:    number | null;
+  diversityScore:   number | null;
+  totalPrompts:     number | null;
+  totalMentions:    number | null;
+  modelsBreakdown:  Record<string, number> | null;
 }
 
-export interface LatestScore {
-  score_date:       string;
-  overall_score:    number;
-  mention_score:    number | null;
-  ranking_score:    number | null;
-  sentiment_score:  number | null;
-  citation_score:   number | null;
-  diversity_score:  number | null;
-  total_prompts:    number | null;
-  total_mentions:   number | null;
-  models_breakdown: Record<string, number> | null;
+export interface DashboardData {
+  currentScore:  number;
+  scoreBand:     string;
+  scoreChange:   number;
+  totalPrompts:  number;
+  totalMentions: number;
+  trend:         TrendEntry[];
 }
+
+export type LatestScore = TrendEntry;
 
 export const visibilityApi = {
   getDashboard: (projectId: string, days = 30) =>

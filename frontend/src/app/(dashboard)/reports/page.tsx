@@ -1,6 +1,7 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
+import DemoNotice from "@/components/shared/DemoNotice";
 import {
   FileText, Download, Mail, Plus, Calendar,
   CheckCircle2, Clock, Users, HardDrive, ArrowUpRight,
@@ -85,6 +86,8 @@ export default function ReportsPage() {
       <Topbar title="Reports" subtitle="Generate and schedule AI visibility reports" />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <DemoNotice what="No reports have been generated for your account." />
 
         {/* ── Stats Row ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
