@@ -1,6 +1,7 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
+import DemoNotice from "@/components/shared/DemoNotice";
 import {
   CheckCircle2, Zap, Crown, Building2,
   CreditCard, Calendar, Download, TrendingUp, Users, Activity,
@@ -86,6 +87,8 @@ export default function BillingPage() {
       <Topbar title="Billing" subtitle="Manage your subscription and usage" />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <DemoNotice what="Your real plan and usage are not shown here yet." />
 
         {/* ── Stats Row ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>

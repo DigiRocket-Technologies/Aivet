@@ -6,10 +6,15 @@ import { getScoreBand } from "@/lib/colors";
 interface ScoreGaugeProps {
   score: number;
   size?: number;
+  /** False when the account has no scores yet — renders an empty dial rather
+   *  than a red 0/CRITICAL, which reads as a catastrophic score. */
+  hasData?: boolean;
 }
 
-export default function ScoreGauge({ score, size = 180 }: ScoreGaugeProps) {
-  const band = getScoreBand(score);
+export default function ScoreGauge({ score, size = 180, hasData = true }: ScoreGaugeProps) {
+  const band = hasData
+    ? getScoreBand(score)
+    : { label: "No data", color: "rgba(255,255,255,0.30)", bg: "rgba(255,255,255,0.06)" };
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasH = Math.round(size * 0.65);
 
@@ -30,7 +35,7 @@ export default function ScoreGauge({ score, size = 180 }: ScoreGaugeProps) {
     const r  = size * 0.40;
     const startAngle = Math.PI * 1.0;   // 180° — left
     const endAngle   = Math.PI * 2.0;   // 360° — right (full semicircle)
-    const scoreAngle = startAngle + (score / 100) * (endAngle - startAngle);
+    const scoreAngle = startAngle + ((hasData ? score : 0) / 100) * (endAngle - startAngle);
 
     // ── Track (background arc) ──
     ctx.beginPath();
@@ -72,7 +77,7 @@ export default function ScoreGauge({ score, size = 180 }: ScoreGaugeProps) {
     ctx.fillStyle = band.color;
     ctx.fill();
     ctx.shadowBlur = 0;
-  }, [score, size, canvasH, band.color]);
+  }, [score, size, canvasH, band.color, hasData]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: size }}>
@@ -107,7 +112,7 @@ export default function ScoreGauge({ score, size = 180 }: ScoreGaugeProps) {
               letterSpacing: "-1px",
             }}
           >
-            {score}
+            {hasData ? score : "—"}
           </span>
           <span
             style={{

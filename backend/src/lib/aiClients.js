@@ -56,7 +56,10 @@ export async function callClaude(prompt, opts = {}) {
 
 export async function callGemini(prompt, opts = {}) {
   const start = Date.now();
-  const model = opts.model ?? "gemini-1.5-flash";
+  // "gemini-flash-latest" is an alias that tracks the current Flash model.
+  // Pinning an exact version (gemini-1.5-flash) silently 404s once Google
+  // retires it, which is how this call broke.
+  const model = opts.model ?? process.env.GEMINI_MODEL ?? "gemini-flash-latest";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
     method:  "POST",

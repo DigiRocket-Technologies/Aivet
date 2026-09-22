@@ -1,6 +1,7 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
+import DemoNotice from "@/components/shared/DemoNotice";
 import { Link2, ExternalLink, TrendingUp, TrendingDown, Shield, AlertCircle, Minus, ArrowUpRight } from "lucide-react";
 
 // ── Data ───────────────────────────────────────────────────────────────────
@@ -75,6 +76,8 @@ export default function CitationsPage() {
       <Topbar title="Citation Tracking" subtitle="Sources AI models use to cite your brand" />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <DemoNotice what="Citation sources for your brand are not tracked yet." />
 
         {/* ── Stats Row ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>

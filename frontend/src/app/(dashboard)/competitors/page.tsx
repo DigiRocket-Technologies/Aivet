@@ -1,6 +1,7 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
+import DemoNotice from "@/components/shared/DemoNotice";
 import CompetitorChart from "@/components/charts/CompetitorChart";
 import { Plus, TrendingUp, TrendingDown, Minus, ExternalLink, Trophy, Eye, Link2, Users } from "lucide-react";
 import { engineColors, getScoreBand } from "@/lib/colors";
@@ -128,6 +129,8 @@ export default function CompetitorsPage() {
       <Topbar title="Competitor Analysis" subtitle="Track visibility share across AI models" />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <DemoNotice what="Competitors you add in Settings are not reflected here yet." />
 
         {/* ── Stats Row ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>

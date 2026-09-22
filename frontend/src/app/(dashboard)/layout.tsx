@@ -1,8 +1,10 @@
+import AuthGuard from "@/components/auth/AuthGuard";
 import Sidebar from "@/components/sidebar/Sidebar";
 import Preloader from "@/components/shared/Preloader";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
+    <AuthGuard>
     <div style={{ background: "#0E0F11", minHeight: "100vh", display: "flex" }}>
       <Preloader />
 
@@ -22,5 +24,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {children}
       </main>
     </div>
+    </AuthGuard>
   );
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuthStore } from "@/lib/stores/authStore";
 import {
   LayoutDashboard, Eye, Zap, Users2, Link2, Sparkles,
   FileText, CreditCard, Settings, ChevronDown,
@@ -23,8 +24,31 @@ const BOTTOM_ITEMS = [
   { href: "/settings", icon: Settings,   label: "Settings" },
 ];
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
+  const router   = useRouter();
+
+  const user      = useAuthStore((s) => s.user);
+  const projects  = useAuthStore((s) => s.projects);
+  const projectId = useAuthStore((s) => s.projectId);
+  const logout    = useAuthStore((s) => s.logout);
+
+  const activeProject = projects.find((p) => p._id === projectId) ?? null;
+  const projectName   = activeProject?.name ?? "No project";
+  const displayName   = user?.fullName ?? "—";
+  const displayEmail  = user?.email ?? "";
+
+  function handleLogout() {
+    logout();
+    router.replace("/login");
+  }
 
   const isActive = (href: string) =>
     pathname === href || pathname.startsWith(href + "/");
@@ -126,7 +150,7 @@ export default function Sidebar() {
               flexShrink: 0,
             }}
           >
-            A
+            {projectName.charAt(0).toUpperCase()}
           </div>
           <span
             style={{
@@ -140,7 +164,7 @@ export default function Sidebar() {
               whiteSpace: "nowrap",
             }}
           >
-            Acme Corp
+            {projectName}
           </span>
           <ChevronDown size={13} style={{ color: "rgba(255,255,255,0.40)", flexShrink: 0 }} />
         </button>
@@ -269,7 +293,6 @@ export default function Sidebar() {
             padding: "8px 10px",
             borderRadius: 8,
             marginTop: 4,
-            cursor: "pointer",
           }}
           onMouseEnter={(e) => {
             (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)";
@@ -293,17 +316,41 @@ export default function Sidebar() {
               flexShrink: 0,
             }}
           >
-            JD
+            {initialsOf(displayName)}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <p style={{ fontSize: 12, fontWeight: 600, color: "#fff", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              John Doe
+              {displayName}
             </p>
             <p style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", margin: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              john@acme.com
+              {displayEmail}
             </p>
           </div>
-          <LogOut size={13} style={{ color: "rgba(255,255,255,0.35)", flexShrink: 0 }} />
+          <button
+            type="button"
+            onClick={handleLogout}
+            aria-label="Sign out"
+            title="Sign out"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 4,
+              borderRadius: 6,
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.08)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+            }}
+          >
+            <LogOut size={13} style={{ color: "rgba(255,255,255,0.55)" }} />
+          </button>
         </div>
       </div>
     </aside>

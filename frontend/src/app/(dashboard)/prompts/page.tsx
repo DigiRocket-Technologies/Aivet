@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Topbar from "@/components/shared/Topbar";
-import { Plus, Play, Pause, Trash2, ChevronRight, Clock, CheckCircle2, XCircle, MoreHorizontal, Zap, BarChart2, Activity } from "lucide-react";
-import { engineColors } from "@/lib/colors";
+import EmptyState from "@/components/dashboard/EmptyState";
+import Link from "next/link";
+import {
+  Plus, Play, Trash2, Clock, CheckCircle2, XCircle, Zap, BarChart2, Activity,
+  AlertCircle, Loader2, ChevronDown, Bot, RefreshCw,
+} from "lucide-react";
+import { useCampaigns } from "@/lib/hooks/useCampaigns";
+import { campaignsApi, type Campaign, type PromptRun } from "@/lib/api/campaigns";
+import { useAuthStore } from "@/lib/stores/authStore";
 
 // ── Model Logos ────────────────────────────────────────────────────────────
 
@@ -41,20 +48,32 @@ function PerplexityLogo({ size = 16 }: { size?: number }) {
     </svg>
   );
 }
+function GenericEngineLogo({ size = 16 }: { size?: number }) {
+  return <Bot size={size} style={{ color: "#9CA3AF" }} />;
+}
 
+// Engine ids come from the API (see backend/src/lib/aiClients.js), which
+// returns google_ai_overview for the DataForSEO caller.
 const MODEL_LOGO_MAP: Record<string, React.FC<{ size?: number }>> = {
-  chatgpt: ChatGPTLogo,
-  gemini: GeminiLogo,
-  claude: ClaudeLogo,
-  perplexity: PerplexityLogo,
+  chatgpt:            ChatGPTLogo,
+  gemini:             GeminiLogo,
+  claude:             ClaudeLogo,
+  perplexity:         PerplexityLogo,
+  google_ai_overview: GeminiLogo,
 };
 
 const MODEL_LABEL: Record<string, string> = {
-  chatgpt: "ChatGPT",
-  gemini: "Gemini",
-  claude: "Claude",
-  perplexity: "Perplexity",
+  chatgpt:            "ChatGPT",
+  gemini:             "Gemini",
+  claude:             "Claude",
+  perplexity:         "Perplexity",
+  google_ai_overview: "Google AI Overview",
 };
+
+function engineLabel(id?: string) {
+  if (!id) return "Unknown";
+  return MODEL_LABEL[id] ?? id.replace(/_/g, " ");
+}
 
 // ── Status Config ──────────────────────────────────────────────────────────
 
@@ -65,44 +84,9 @@ const STATUS_CONFIG = {
   failed:    { color: "#EF4444", bg: "rgba(239,68,68,0.12)",   icon: XCircle,      label: "Failed"    },
 };
 
-// ── Data ───────────────────────────────────────────────────────────────────
+type RunStatus = keyof typeof STATUS_CONFIG;
 
-const CAMPAIGNS = [
-  {
-    id: "1", name: "Brand Awareness Tracking", prompts: 12, frequency: "Daily",
-    lastRun: "2h ago", nextRun: "in 22h", status: "completed",
-    models: ["chatgpt", "gemini", "claude", "perplexity"],
-    avgScore: 72, totalRuns: 84, successRate: 96,
-  },
-  {
-    id: "2", name: "Competitor Comparison", prompts: 8, frequency: "Daily",
-    lastRun: "Running...", nextRun: "—", status: "running",
-    models: ["chatgpt", "claude"],
-    avgScore: 65, totalRuns: 42, successRate: 88,
-  },
-  {
-    id: "3", name: "Product Feature Mentions", prompts: 15, frequency: "Weekly",
-    lastRun: "3d ago", nextRun: "in 4d", status: "pending",
-    models: ["chatgpt", "gemini", "claude", "perplexity"],
-    avgScore: 58, totalRuns: 28, successRate: 100,
-  },
-  {
-    id: "4", name: "Industry Keywords", prompts: 20, frequency: "Daily",
-    lastRun: "1h ago", nextRun: "in 23h", status: "failed",
-    models: ["perplexity"],
-    avgScore: 0, totalRuns: 61, successRate: 74,
-  },
-];
-
-const RECENT_RUNS = [
-  { prompt: "What is the best CRM for small businesses?",  model: "chatgpt",    status: "completed", rank: 2,  time: "2m ago"  },
-  { prompt: "Top project management tools 2024",           model: "claude",     status: "completed", rank: 1,  time: "5m ago"  },
-  { prompt: "Compare Acme Corp vs competitors",            model: "gemini",     status: "completed", rank: 1,  time: "8m ago"  },
-  { prompt: "Best enterprise software solutions",          model: "perplexity", status: "running",   rank: 0,  time: "now"     },
-  { prompt: "SaaS tools for remote teams",                 model: "chatgpt",    status: "failed",    rank: 0,  time: "12m ago" },
-];
-
-// ── Styles ─────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 const card: React.CSSProperties = {
   background: "rgba(255,255,255,0.03)",
@@ -110,22 +94,340 @@ const card: React.CSSProperties = {
   borderRadius: 12,
 };
 
-// ── Component ──────────────────────────────────────────────────────────────
+function relativeTime(iso?: string): string {
+  if (!iso) return "—";
+  const diff = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(diff)) return "—";
+  const mins = Math.round(diff / 60000);
+  if (mins < 1)    return "just now";
+  if (mins < 60)   return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24)    return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+function untilTime(iso?: string): string {
+  if (!iso) return "—";
+  const diff = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(diff)) return "—";
+  if (diff <= 0) return "due";
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24)  return `in ${hrs}h`;
+  return `in ${Math.round(hrs / 24)}d`;
+}
+
+/** Best rank the brand reached across every engine in a run. */
+function bestRank(run: PromptRun): number | null {
+  const ranks = (run.responses ?? [])
+    .flatMap((r) => r.mentions ?? [])
+    .map((m) => m.rankPosition)
+    .filter((n): n is number => typeof n === "number");
+  return ranks.length ? Math.min(...ranks) : null;
+}
+
+// ── New campaign form ──────────────────────────────────────────────────────
+
+function NewCampaignForm({
+  projectId, onCreated, onCancel,
+}: {
+  projectId: string;
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
+  const [name, setName]           = useState("");
+  const [frequency, setFrequency] = useState<Campaign["frequency"]>("daily");
+  const [promptText, setPromptText] = useState("");
+  const [busy, setBusy]   = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const prompts = promptText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  async function submit() {
+    if (busy) return;
+    setError(null);
+    if (!name.trim())   { setError("Give the campaign a name."); return; }
+    if (!prompts.length) { setError("Add at least one prompt, one per line."); return; }
+
+    setBusy(true);
+    try {
+      await campaignsApi.create({
+        projectId,
+        name: name.trim(),
+        frequency,
+        prompts: prompts.map((text) => ({ text, isActive: true })),
+      });
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create campaign.");
+      setBusy(false);
+    }
+  }
+
+  const input: React.CSSProperties = {
+    width: "100%", padding: "9px 13px", borderRadius: 8, fontSize: 13, outline: "none",
+    background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.10)",
+    color: "#fff", boxSizing: "border-box",
+  };
+  const label: React.CSSProperties = {
+    display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em",
+    color: "rgba(255,255,255,0.42)", marginBottom: 6,
+  };
+
+  return (
+    <div style={{ ...card, padding: 22 }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: "0 0 18px 0" }}>
+        New Campaign
+      </h3>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 620 }}>
+        <div>
+          <label htmlFor="campaign-name" style={label}>CAMPAIGN NAME</label>
+          <input id="campaign-name" style={input} value={name}
+            onChange={(e) => setName(e.target.value)} placeholder="Brand awareness tracking" />
+        </div>
+
+        <div>
+          <label htmlFor="campaign-frequency" style={label}>FREQUENCY</label>
+          <select id="campaign-frequency" style={input} value={frequency}
+            onChange={(e) => setFrequency(e.target.value as Campaign["frequency"])}>
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="campaign-prompts" style={label}>PROMPTS — ONE PER LINE</label>
+          <textarea id="campaign-prompts" rows={5} style={{ ...input, resize: "vertical", fontFamily: "inherit" }}
+            value={promptText} onChange={(e) => setPromptText(e.target.value)}
+            placeholder={"What is the best CRM for small businesses?\nTop project management tools"} />
+          <p style={{ fontSize: 11, color: "rgba(255,255,255,0.32)", margin: "6px 0 0 0" }}>
+            {prompts.length} prompt{prompts.length === 1 ? "" : "s"} · each is sent to every configured AI engine
+          </p>
+        </div>
+
+        {error && <p style={{ fontSize: 12, color: "#FCA5A5", margin: 0 }}>{error}</p>}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={submit} disabled={busy} style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "9px 20px", borderRadius: 8, border: "none",
+            cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+            background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700,
+          }}>
+            {busy ? <><Loader2 size={13} className="animate-spin" /> Creating…</> : "Create Campaign"}
+          </button>
+          <button onClick={onCancel} style={{
+            padding: "9px 20px", borderRadius: 8, cursor: "pointer",
+            background: "transparent", border: "1px solid rgba(255,255,255,0.14)",
+            color: "rgba(255,255,255,0.65)", fontSize: 13, fontWeight: 600,
+          }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── One run row, expandable to the raw engine answers ──────────────────────
+
+function RunRow({ run }: { run: PromptRun }) {
+  const [open, setOpen] = useState(false);
+  const cfg = STATUS_CONFIG[run.status as RunStatus] ?? STATUS_CONFIG.pending;
+  const StatusIcon = cfg.icon;
+  const rank = bestRank(run);
+  const responses = run.responses ?? [];
+
+  return (
+    <div style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 12,
+          padding: "12px 16px", background: "transparent", border: "none",
+          cursor: "pointer", textAlign: "left",
+        }}
+      >
+        <span style={{
+          display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
+          padding: "3px 9px", borderRadius: 20, background: cfg.bg, color: cfg.color,
+          fontSize: 11, fontWeight: 600,
+        }}>
+          <StatusIcon size={11} />
+          {cfg.label}
+        </span>
+
+        <span style={{
+          flex: 1, minWidth: 0, fontSize: 12.5, color: "rgba(255,255,255,0.80)",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {run.promptText}
+        </span>
+
+        <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+          {responses.map((r, i) => {
+            const Logo = MODEL_LOGO_MAP[r.model ?? ""] ?? GenericEngineLogo;
+            return <span key={i} title={engineLabel(r.model)}><Logo size={14} /></span>;
+          })}
+        </span>
+
+        <span style={{
+          fontSize: 11, fontWeight: 600, padding: "2px 7px", borderRadius: 4, flexShrink: 0,
+          minWidth: 34, textAlign: "center",
+          background: "rgba(255,255,255,0.06)",
+          color: rank === 1 ? "#C9F31D" : "rgba(255,255,255,0.45)",
+        }}>
+          {rank ? `#${rank}` : "—"}
+        </span>
+
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.30)", flexShrink: 0, minWidth: 62, textAlign: "right" }}>
+          {relativeTime(run.createdAt)}
+        </span>
+
+        <ChevronDown size={13} style={{
+          color: "rgba(255,255,255,0.35)", flexShrink: 0,
+          transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s",
+        }} />
+      </button>
+
+      {open && (
+        <div style={{ padding: "0 16px 14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {run.errorMessage && (
+            <p style={{
+              fontSize: 11.5, color: "#FCA5A5", margin: 0, padding: "8px 10px", borderRadius: 7,
+              background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.18)",
+            }}>
+              {run.errorMessage}
+            </p>
+          )}
+
+          {responses.length === 0 && !run.errorMessage && (
+            <p style={{ fontSize: 11.5, color: "rgba(255,255,255,0.35)", margin: 0 }}>
+              {run.status === "running" || run.status === "pending"
+                ? "Waiting for the engines to answer…"
+                : "No engine returned a response."}
+            </p>
+          )}
+
+          {responses.map((r, i) => {
+            const Logo = MODEL_LOGO_MAP[r.model ?? ""] ?? GenericEngineLogo;
+            const mention = (r.mentions ?? [])[0];
+            return (
+              <div key={i} style={{
+                padding: "10px 12px", borderRadius: 8,
+                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
+                  <Logo size={13} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>{engineLabel(r.model)}</span>
+                  {mention
+                    ? <span style={{
+                        fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4,
+                        background: "rgba(201,243,29,0.14)", color: "#C9F31D",
+                      }}>
+                        mentioned{mention.rankPosition ? ` · rank #${mention.rankPosition}` : ""}
+                      </span>
+                    : <span style={{
+                        fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 4,
+                        background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.40)",
+                      }}>
+                        not mentioned
+                      </span>
+                  }
+                  <span style={{ marginLeft: "auto", fontSize: 10, color: "rgba(255,255,255,0.28)" }}>
+                    {r.latencyMs ? `${(r.latencyMs / 1000).toFixed(1)}s` : ""}
+                    {r.citations?.length ? ` · ${r.citations.length} citations` : ""}
+                  </span>
+                </div>
+                <p style={{
+                  fontSize: 11.5, lineHeight: 1.55, color: "rgba(255,255,255,0.58)",
+                  margin: 0, whiteSpace: "pre-wrap",
+                }}>
+                  {(r.responseText ?? "").slice(0, 600)}
+                  {(r.responseText ?? "").length > 600 ? "…" : ""}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────
 
 export default function PromptsPage() {
-  const [activeFilter, setActiveFilter] = useState(0);
+  const projectId = useAuthStore((s) => s.projectId);
+  const { campaigns, runs, runsByCampaign, loading, error, reload } = useCampaigns();
 
-  const filters = [
-    { label: "All Campaigns", count: 4 },
-    { label: "Active",        count: 2 },
-    { label: "Paused",        count: 1 },
-  ];
+  const [filter, setFilter]     = useState<"all" | "active" | "paused">("all");
+  const [creating, setCreating] = useState(false);
+  const [busyId, setBusyId]     = useState<string | null>(null);
+  const [notice, setNotice]     = useState<string | null>(null);
 
-  const stats = [
-    { label: "Total Campaigns", value: "4",   icon: BarChart2, color: "#C9F31D" },
-    { label: "Total Runs",      value: "215",  icon: Zap,       color: "#22B8CF" },
-    { label: "Success Rate",    value: "89%",  icon: CheckCircle2, color: "#22C55E" },
-    { label: "Running Now",     value: "1",    icon: Activity,  color: "#C9F31D" },
+  const stats = useMemo(() => {
+    const total     = runs.length;
+    const completed = runs.filter((r) => r.status === "completed").length;
+    const inFlight  = runs.filter((r) => r.status === "running" || r.status === "pending").length;
+    return {
+      campaigns: campaigns.length,
+      runs:      total,
+      // Undefined, not 0% — a project with no runs has no success rate.
+      success:   total ? `${Math.round((completed / total) * 100)}%` : "—",
+      running:   inFlight,
+    };
+  }, [campaigns, runs]);
+
+  const visible = campaigns.filter((c) =>
+    filter === "all" ? true : filter === "active" ? c.isActive : !c.isActive);
+
+  async function handleRun(c: Campaign) {
+    setBusyId(c._id);
+    setNotice(null);
+    try {
+      const res = await campaignsApi.run(c._id);
+      setNotice(`Queued ${res.queued} prompt${res.queued === 1 ? "" : "s"} for "${c.name}". Results appear below as each engine answers.`);
+      // The worker runs inline locally and takes a few seconds per engine.
+      setTimeout(reload, 4000);
+      setTimeout(reload, 12000);
+      setTimeout(reload, 25000);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not start the run.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleToggle(c: Campaign) {
+    setBusyId(c._id);
+    try {
+      await campaignsApi.update(c._id, { isActive: !c.isActive });
+      reload();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(c: Campaign) {
+    if (!window.confirm(`Delete "${c.name}"? This cannot be undone.`)) return;
+    setBusyId(c._id);
+    try {
+      await campaignsApi.remove(c._id);
+      reload();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const statCards = [
+    { label: "Total Campaigns", value: stats.campaigns, icon: BarChart2,    color: "#C9F31D" },
+    { label: "Total Runs",      value: stats.runs,      icon: Zap,          color: "#22B8CF" },
+    { label: "Success Rate",    value: stats.success,   icon: CheckCircle2, color: "#22C55E" },
+    { label: "Running Now",     value: stats.running,   icon: Activity,     color: "#C9F31D" },
   ];
 
   return (
@@ -134,48 +436,87 @@ export default function PromptsPage() {
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
 
-        {/* ── Stats Row ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-          {stats.map(({ label, value, icon: Icon, color }) => (
-            <div key={label} style={{ ...card, padding: "16px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+        {!projectId && !loading && (
+          <div style={{
+            padding: "12px 16px", borderRadius: 10, display: "flex", alignItems: "center", gap: 8,
+            background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.20)",
+          }}>
+            <AlertCircle size={14} style={{ color: "#F59E0B" }} />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.60)" }}>
+              No project yet. Create one in{" "}
+              <Link href="/settings" style={{ color: "#C9F31D", fontWeight: 600 }}>Settings → Project</Link>
+              {" "}before running campaigns.
+            </span>
+          </div>
+        )}
+
+        {error && (
+          <div style={{
+            padding: "12px 16px", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between",
+            background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.20)",
+          }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "rgba(255,255,255,0.65)" }}>
+              <AlertCircle size={14} style={{ color: "#EF4444" }} />
+              {error}
+            </span>
+            <button onClick={reload} style={{
+              display: "flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 7,
+              border: "none", cursor: "pointer", background: "rgba(239,68,68,0.12)",
+              color: "#EF4444", fontSize: 11, fontWeight: 600,
+            }}>
+              <RefreshCw size={11} /> Retry
+            </button>
+          </div>
+        )}
+
+        {notice && (
+          <div style={{
+            padding: "12px 16px", borderRadius: 10, display: "flex", alignItems: "center", gap: 8,
+            background: "rgba(201,243,29,0.07)", border: "1px solid rgba(201,243,29,0.20)",
+          }}>
+            <CheckCircle2 size={14} style={{ color: "#C9F31D", flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.70)" }}>{notice}</span>
+          </div>
+        )}
+
+        {/* ── Stats ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+          {statCards.map(({ label, value, icon: Icon, color }) => (
+            <div key={label} style={{ ...card, padding: 20, display: "flex", alignItems: "center", gap: 14 }}>
               <div style={{
-                width: 38, height: 38, borderRadius: 10,
-                background: `${color}15`, border: `1px solid ${color}25`,
-                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                width: 38, height: 38, borderRadius: 9, flexShrink: 0,
+                background: `${color}18`, display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <Icon size={16} style={{ color }} />
+                <Icon size={17} style={{ color }} />
               </div>
               <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", lineHeight: 1, letterSpacing: "-0.5px", fontVariantNumeric: "tabular-nums" }}>
-                  {value}
-                </div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)", marginTop: 3 }}>{label}</div>
+                <p style={{ fontSize: 22, fontWeight: 700, color: "#fff", margin: 0, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>
+                  {loading ? "…" : value}
+                </p>
+                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "2px 0 0 0" }}>{label}</p>
               </div>
             </div>
           ))}
         </div>
 
-        {/* ── Filter + New Campaign ── */}
+        {/* ── Filters + New ── */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {filters.map(({ label, count }, i) => (
-              <button
-                key={label}
-                onClick={() => setActiveFilter(i)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
-                  fontSize: 12, fontWeight: 600, transition: "all 0.15s",
-                  background: activeFilter === i ? "#C9F31D" : "rgba(255,255,255,0.06)",
-                  color: activeFilter === i ? "#000" : "rgba(255,255,255,0.60)",
-                  outline: activeFilter !== i ? "1px solid rgba(255,255,255,0.08)" : "none",
-                }}
-              >
+          <div style={{ display: "flex", gap: 8 }}>
+            {([
+              { id: "all"    as const, label: "All Campaigns", count: campaigns.length },
+              { id: "active" as const, label: "Active",        count: campaigns.filter((c) => c.isActive).length },
+              { id: "paused" as const, label: "Paused",        count: campaigns.filter((c) => !c.isActive).length },
+            ]).map(({ id, label, count }) => (
+              <button key={id} onClick={() => setFilter(id)} style={{
+                display: "flex", alignItems: "center", gap: 7, padding: "8px 16px", borderRadius: 9,
+                border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600,
+                background: filter === id ? "#C9F31D" : "rgba(255,255,255,0.04)",
+                color: filter === id ? "#000" : "rgba(255,255,255,0.55)",
+              }}>
                 {label}
                 <span style={{
-                  padding: "1px 6px", borderRadius: 20, fontSize: 10, fontWeight: 700,
-                  background: activeFilter === i ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.10)",
-                  color: activeFilter === i ? "#000" : "rgba(255,255,255,0.45)",
+                  fontSize: 11, padding: "1px 6px", borderRadius: 20,
+                  background: filter === id ? "rgba(0,0,0,0.15)" : "rgba(255,255,255,0.08)",
                 }}>
                   {count}
                 </span>
@@ -183,269 +524,188 @@ export default function PromptsPage() {
             ))}
           </div>
 
-          <button style={{
-            display: "flex", alignItems: "center", gap: 7,
-            padding: "8px 16px", borderRadius: 8, border: "none", cursor: "pointer",
-            background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700,
-          }}>
-            <Plus size={14} />
-            New Campaign
+          <button
+            onClick={() => setCreating(true)}
+            disabled={!projectId}
+            style={{
+              display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 9,
+              border: "none", cursor: projectId ? "pointer" : "not-allowed", opacity: projectId ? 1 : 0.45,
+              background: "#C9F31D", color: "#000", fontSize: 13, fontWeight: 700,
+            }}
+          >
+            <Plus size={14} /> New Campaign
           </button>
         </div>
 
-        {/* ── Campaign Cards ── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {CAMPAIGNS.map((c) => {
-            const st = STATUS_CONFIG[c.status as keyof typeof STATUS_CONFIG];
-            const StatusIcon = st.icon;
-            const isRunning = c.status === "running";
+        {creating && projectId && (
+          <NewCampaignForm
+            projectId={projectId}
+            onCancel={() => setCreating(false)}
+            onCreated={() => { setCreating(false); reload(); }}
+          />
+        )}
 
-            return (
-              <div
-                key={c.id}
-                style={{
-                  ...card,
-                  padding: "18px 20px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 16,
-                  cursor: "pointer",
-                  transition: "border-color 0.2s",
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.14)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.08)"; }}
-              >
-                {/* Status icon */}
-                <div style={{
-                  width: 40, height: 40, borderRadius: 10, flexShrink: 0,
-                  background: st.bg, display: "flex", alignItems: "center", justifyContent: "center",
-                  position: "relative",
-                }}>
-                  <StatusIcon size={17} style={{ color: st.color }} />
-                  {isRunning && (
-                    <span style={{
-                      position: "absolute", inset: -2, borderRadius: 12,
-                      border: `2px solid ${st.color}`,
-                      animation: "pulse-ring 1.6s ease-out infinite",
-                      opacity: 0.5,
-                    }} />
-                  )}
-                </div>
+        {/* ── Campaign list ── */}
+        {loading ? (
+          <div style={{ ...card, padding: 40 }}>
+            <EmptyState icon={Loader2} title="Loading campaigns…" />
+          </div>
+        ) : visible.length === 0 ? (
+          <div style={{ ...card, padding: 40 }}>
+            <EmptyState
+              icon={Zap}
+              title={campaigns.length ? "No campaigns match this filter" : "No campaigns yet"}
+              hint={campaigns.length
+                ? undefined
+                : "Create a campaign to ask AI engines about your brand and track how you rank."}
+            />
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {visible.map((c) => {
+              const cRuns    = runsByCampaign[c._id] ?? [];
+              const latest   = cRuns[0];
+              const done     = cRuns.filter((r) => r.status === "completed").length;
+              const active   = cRuns.some((r) => r.status === "running" || r.status === "pending");
+              const engines  = Array.from(new Set(
+                cRuns.flatMap((r) => (r.responses ?? []).map((x) => x.model)).filter(Boolean)
+              )) as string[];
+              const status: RunStatus = active
+                ? "running"
+                : latest
+                  ? (latest.status as RunStatus)
+                  : "pending";
+              const cfg = STATUS_CONFIG[status];
 
-                {/* Name + meta */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{c.name}</span>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
-                      background: st.bg, color: st.color, textTransform: "capitalize",
-                    }}>
-                      {st.label}
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
-                    <span>{c.prompts} prompts</span>
-                    <span style={{ opacity: 0.4 }}>·</span>
-                    <span>{c.frequency}</span>
-                    <span style={{ opacity: 0.4 }}>·</span>
-                    <span>Last: {c.lastRun}</span>
-                    <span style={{ opacity: 0.4 }}>·</span>
-                    <span>Next: {c.nextRun}</span>
-                    <span style={{ opacity: 0.4 }}>·</span>
-                    <span style={{ color: c.successRate >= 90 ? "#22C55E" : c.successRate >= 75 ? "#F59E0B" : "#EF4444" }}>
-                      {c.successRate}% success
-                    </span>
-                  </div>
-                </div>
-
-                {/* Model logos */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  {c.models.map((m) => {
-                    const Logo = MODEL_LOGO_MAP[m];
-                    const color = engineColors[m];
-                    return (
-                      <div
-                        key={m}
-                        title={MODEL_LABEL[m]}
-                        style={{
-                          width: 28, height: 28, borderRadius: 7, flexShrink: 0,
-                          background: `${color}15`, border: `1px solid ${color}30`,
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                        }}
-                      >
-                        <Logo size={14} />
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Avg score */}
-                <div style={{ textAlign: "right", minWidth: 52 }}>
+              return (
+                <div key={c._id} style={{ ...card, padding: "18px 20px", display: "flex", alignItems: "center", gap: 16 }}>
                   <div style={{
-                    fontSize: 24, fontWeight: 800, lineHeight: 1, letterSpacing: "-0.5px",
-                    fontVariantNumeric: "tabular-nums",
-                    color: c.avgScore > 0 ? "#C9F31D" : "rgba(255,255,255,0.22)",
+                    width: 42, height: 42, borderRadius: 10, flexShrink: 0,
+                    background: cfg.bg, border: `1px solid ${cfg.color}30`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
                   }}>
-                    {c.avgScore > 0 ? c.avgScore : "—"}
+                    <cfg.icon size={17} style={{ color: cfg.color }} />
                   </div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 2 }}>avg score</div>
-                </div>
 
-                {/* Action buttons */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <button
-                    style={{
-                      width: 30, height: 30, borderRadius: 8, border: "none", cursor: "pointer",
-                      background: "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center",
-                    }}
-                    title={isRunning ? "Pause" : "Run"}
-                  >
-                    {isRunning
-                      ? <Pause size={12} style={{ color: "rgba(255,255,255,0.55)" }} />
-                      : <Play size={12} style={{ color: "rgba(255,255,255,0.55)" }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                      <h3 style={{ fontSize: 14.5, fontWeight: 700, color: "#fff", margin: 0 }}>{c.name}</h3>
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 600, padding: "2px 8px", borderRadius: 20,
+                        background: cfg.bg, color: cfg.color,
+                      }}>
+                        {cfg.label}
+                      </span>
+                      {!c.isActive && (
+                        <span style={{
+                          fontSize: 10.5, fontWeight: 600, padding: "2px 8px", borderRadius: 20,
+                          background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.45)",
+                        }}>
+                          Paused
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ fontSize: 12, color: "rgba(255,255,255,0.42)", margin: 0 }}>
+                      {c.prompts.length} prompt{c.prompts.length === 1 ? "" : "s"}
+                      {"  ·  "}{c.frequency}
+                      {"  ·  "}Last: {latest ? relativeTime(latest.createdAt) : "never"}
+                      {"  ·  "}Next: {c.isActive ? untilTime(c.nextRunAt) : "paused"}
+                      {cRuns.length > 0 && `  ·  ${done}/${cRuns.length} runs succeeded`}
+                    </p>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                    {engines.length > 0
+                      ? engines.map((m) => {
+                          const Logo = MODEL_LOGO_MAP[m] ?? GenericEngineLogo;
+                          return (
+                            <span key={m} title={engineLabel(m)} style={{
+                              width: 30, height: 30, borderRadius: 8,
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)",
+                            }}>
+                              <Logo size={15} />
+                            </span>
+                          );
+                        })
+                      : <span style={{ fontSize: 11, color: "rgba(255,255,255,0.28)" }}>not run yet</span>
                     }
-                  </button>
-                  <button style={{
-                    width: 30, height: 30, borderRadius: 8, border: "none", cursor: "pointer",
-                    background: "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center",
-                  }}>
-                    <MoreHorizontal size={12} style={{ color: "rgba(255,255,255,0.55)" }} />
-                  </button>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    <button
+                      onClick={() => handleRun(c)}
+                      disabled={busyId === c._id}
+                      title="Run now"
+                      style={{
+                        width: 34, height: 34, borderRadius: 8, cursor: "pointer",
+                        background: "rgba(201,243,29,0.10)", border: "1px solid rgba(201,243,29,0.22)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >
+                      {busyId === c._id
+                        ? <Loader2 size={14} className="animate-spin" style={{ color: "#C9F31D" }} />
+                        : <Play size={14} style={{ color: "#C9F31D" }} />}
+                    </button>
+                    <button
+                      onClick={() => handleToggle(c)}
+                      title={c.isActive ? "Pause schedule" : "Resume schedule"}
+                      style={{
+                        width: 34, height: 34, borderRadius: 8, cursor: "pointer",
+                        background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >
+                      <Clock size={14} style={{ color: "rgba(255,255,255,0.55)" }} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(c)}
+                      title="Delete campaign"
+                      style={{
+                        width: 34, height: 34, borderRadius: 8, cursor: "pointer",
+                        background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.16)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >
+                      <Trash2 size={14} style={{ color: "#EF4444" }} />
+                    </button>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
 
-                <ChevronRight size={14} style={{ color: "rgba(255,255,255,0.18)", flexShrink: 0 }} />
-              </div>
-            );
-          })}
-        </div>
-
-        {/* ── Recent Runs ── */}
+        {/* ── Recent runs ── */}
         <div style={{ ...card, overflow: "hidden" }}>
-          {/* Header */}
           <div style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid rgba(255,255,255,0.07)",
             display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)",
           }}>
             <h3 style={{ fontSize: 13, fontWeight: 700, color: "#fff", margin: 0 }}>Recent Prompt Runs</h3>
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>Last 30 minutes</span>
+            <button onClick={reload} style={{
+              display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", borderRadius: 7,
+              border: "1px solid rgba(255,255,255,0.10)", cursor: "pointer",
+              background: "transparent", color: "rgba(255,255,255,0.55)", fontSize: 11, fontWeight: 600,
+            }}>
+              <RefreshCw size={11} /> Refresh
+            </button>
           </div>
 
-          {/* Table */}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                  {["Status", "Model", "Prompt", "Rank", "Time"].map((h) => (
-                    <th key={h} style={{
-                      padding: "9px 16px", textAlign: "left",
-                      fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
-                      color: "rgba(255,255,255,0.30)", textTransform: "uppercase", whiteSpace: "nowrap",
-                    }}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {RECENT_RUNS.map((r, i) => {
-                  const st = STATUS_CONFIG[r.status as keyof typeof STATUS_CONFIG];
-                  const StatusIcon = st.icon;
-                  const Logo = MODEL_LOGO_MAP[r.model];
-                  const color = engineColors[r.model];
-                  const isRunning = r.status === "running";
-
-                  return (
-                    <tr
-                      key={i}
-                      style={{
-                        borderBottom: i < RECENT_RUNS.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
-                        transition: "background 0.15s",
-                      }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                    >
-                      {/* Status */}
-                      <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{
-                          display: "inline-flex", alignItems: "center", gap: 5,
-                          padding: "3px 9px", borderRadius: 20,
-                          background: st.bg, fontSize: 10, fontWeight: 700, color: st.color,
-                        }}>
-                          <StatusIcon size={10} />
-                          {st.label}
-                        </div>
-                      </td>
-
-                      {/* Model */}
-                      <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{
-                            width: 26, height: 26, borderRadius: 7, flexShrink: 0,
-                            background: `${color}15`, border: `1px solid ${color}30`,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                          }}>
-                            <Logo size={13} />
-                          </div>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.75)" }}>
-                            {MODEL_LABEL[r.model]}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Prompt */}
-                      <td style={{ padding: "12px 16px", maxWidth: 340 }}>
-                        <span style={{
-                          fontSize: 12, color: "rgba(255,255,255,0.65)",
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          display: "block",
-                        }}>
-                          {r.prompt}
-                        </span>
-                      </td>
-
-                      {/* Rank */}
-                      <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>
-                        {r.rank > 0 ? (
-                          <span style={{
-                            fontSize: 12, fontWeight: 700,
-                            padding: "3px 9px", borderRadius: 6,
-                            background: r.rank === 1 ? "rgba(201,243,29,0.12)" : "rgba(255,255,255,0.06)",
-                            color: r.rank === 1 ? "#C9F31D" : "rgba(255,255,255,0.55)",
-                          }}>
-                            #{r.rank}
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: 12, color: "rgba(255,255,255,0.20)" }}>—</span>
-                        )}
-                      </td>
-
-                      {/* Time */}
-                      <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>
-                        <span style={{
-                          fontSize: 11, color: isRunning ? "#C9F31D" : "rgba(255,255,255,0.30)",
-                          fontWeight: isRunning ? 600 : 400,
-                        }}>
-                          {r.time}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {runs.length === 0 ? (
+            <EmptyState
+              icon={Zap}
+              title="No prompt runs yet"
+              hint="Press play on a campaign to send its prompts to every configured AI engine."
+            />
+          ) : (
+            <div>
+              {runs.slice(0, 30).map((r) => <RunRow key={r._id} run={r} />)}
+            </div>
+          )}
         </div>
 
       </div>
-
-      {/* Pulse animation for running indicator */}
-      <style>{`
-        @keyframes pulse-ring {
-          0%   { transform: scale(1);   opacity: 0.6; }
-          100% { transform: scale(1.5); opacity: 0;   }
-        }
-      `}</style>
     </div>
   );
 }

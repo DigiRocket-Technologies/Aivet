@@ -1,6 +1,7 @@
 "use client";
 
 import Topbar from "@/components/shared/Topbar";
+import DemoNotice from "@/components/shared/DemoNotice";
 import ScoreGauge from "@/components/charts/ScoreGauge";
 import TrendChart from "@/components/charts/TrendChart";
 import { engineColors, getScoreBand } from "@/lib/colors";
@@ -151,6 +152,8 @@ export default function VisibilityPage() {
       <Topbar title="AI Visibility" subtitle="Per-model breakdown and trend analysis" />
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <DemoNotice what="Per-model visibility scores will appear here once campaigns have run." />
 
         {/* ── ROW 1: Overall Score + Trend Chart ── */}
         <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
